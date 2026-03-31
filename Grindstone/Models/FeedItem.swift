@@ -1,6 +1,6 @@
 import Foundation
 
-struct FeedItem: Identifiable, Hashable, Sendable {
+struct FeedItem: Identifiable, Hashable, Codable, Sendable {
     let id: String
     let title: String
     let url: URL
@@ -10,6 +10,7 @@ struct FeedItem: Identifiable, Hashable, Sendable {
     let commentCount: Int?
     let points: Int?
     let snippet: String?
+    var intraSourceRank: Double
     var crossRefs: [Source]
 
     /// URL normalized for cross-reference matching.
@@ -34,6 +35,15 @@ struct FeedItem: Identifiable, Hashable, Sendable {
         }
         return result
     }
+
+    static func == (lhs: FeedItem, rhs: FeedItem) -> Bool {
+        lhs.id == rhs.id
+    }
+
+    func hash(into hasher: inout Hasher) {
+        // Feed items are enriched after creation, so hash on stable identity only.
+        hasher.combine(id)
+    }
 }
 
 // MARK: - Mock Data
@@ -50,6 +60,7 @@ extension FeedItem {
             commentCount: 142,
             points: 340,
             snippet: "NVIDIA, AMD, and a wave of startups are competing for dominance in the AI accelerator market.",
+            intraSourceRank: 1.0,
             crossRefs: [.memo]
         ),
         FeedItem(
@@ -62,6 +73,7 @@ extension FeedItem {
             commentCount: nil,
             points: nil,
             snippet: "Federal Reserve officials indicated they expect to keep rates steady as inflation cools slower than projected.",
+            intraSourceRank: 0.88,
             crossRefs: [.hn, .rss]
         ),
         FeedItem(
@@ -74,6 +86,7 @@ extension FeedItem {
             commentCount: nil,
             points: nil,
             snippet: "A Stanford study tracking 2,000 workers found a 13% productivity gain for remote employees.",
+            intraSourceRank: 0.72,
             crossRefs: []
         ),
         FeedItem(
@@ -86,6 +99,7 @@ extension FeedItem {
             commentCount: 287,
             points: 512,
             snippet: nil,
+            intraSourceRank: 0.61,
             crossRefs: []
         ),
         FeedItem(
@@ -98,7 +112,41 @@ extension FeedItem {
             commentCount: nil,
             points: nil,
             snippet: "Verve Therapeutics reports positive Phase 1 data for its gene-editing heart disease treatment.",
+            intraSourceRank: 0.94,
             crossRefs: [.hn, .memo]
         ),
     ]
+}
+
+extension FeedItem {
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case url
+        case outlet
+        case source
+        case publishedAt
+        case commentCount
+        case points
+        case snippet
+        case intraSourceRank
+        case crossRefs
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self = FeedItem(
+            id: try container.decode(String.self, forKey: .id),
+            title: try container.decode(String.self, forKey: .title),
+            url: try container.decode(URL.self, forKey: .url),
+            outlet: try container.decodeIfPresent(String.self, forKey: .outlet),
+            source: try container.decode(Source.self, forKey: .source),
+            publishedAt: try container.decode(Date.self, forKey: .publishedAt),
+            commentCount: try container.decodeIfPresent(Int.self, forKey: .commentCount),
+            points: try container.decodeIfPresent(Int.self, forKey: .points),
+            snippet: try container.decodeIfPresent(String.self, forKey: .snippet),
+            intraSourceRank: try container.decodeIfPresent(Double.self, forKey: .intraSourceRank) ?? 0,
+            crossRefs: try container.decodeIfPresent([Source].self, forKey: .crossRefs) ?? []
+        )
+    }
 }

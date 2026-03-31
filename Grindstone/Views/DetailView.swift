@@ -6,6 +6,7 @@ import WebKit
 #endif
 
 struct DetailView: View {
+    @EnvironmentObject private var feedUserState: FeedUserStateStore
     let item: FeedItem
 
     var body: some View {
@@ -14,14 +15,19 @@ struct DetailView: View {
             .modifier(InlineNavigationTitleDisplayMode())
             .toolbar {
 #if os(iOS)
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    bookmarkButton
                     ShareLink(item: item.url)
                 }
 #else
-                ToolbarItem(placement: .automatic) {
+                ToolbarItemGroup(placement: .automatic) {
+                    bookmarkButton
                     ShareLink(item: item.url)
                 }
 #endif
+            }
+            .task {
+                feedUserState.markRead(item)
             }
     }
 
@@ -36,6 +42,14 @@ struct DetailView: View {
         Link("Open in Browser", destination: item.url)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 #endif
+    }
+
+    private var bookmarkButton: some View {
+        Button {
+            feedUserState.toggleSaved(item)
+        } label: {
+            Image(systemName: feedUserState.isSaved(item) ? "bookmark.fill" : "bookmark")
+        }
     }
 }
 

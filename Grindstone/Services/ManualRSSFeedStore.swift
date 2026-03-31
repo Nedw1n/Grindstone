@@ -52,6 +52,30 @@ enum ManualRSSFeedStoreError: LocalizedError {
     }
 }
 
+struct ManualRSSFeedImportResult: Sendable {
+    let importedCount: Int
+    let duplicateCount: Int
+    let invalidCount: Int
+
+    var summary: String {
+        var parts: [String] = []
+
+        if importedCount > 0 {
+            parts.append("Imported \(importedCount) \(importedCount == 1 ? "feed" : "feeds")")
+        }
+
+        if duplicateCount > 0 {
+            parts.append("skipped \(duplicateCount) duplicate\(duplicateCount == 1 ? "" : "s")")
+        }
+
+        if invalidCount > 0 {
+            parts.append("ignored \(invalidCount) invalid entr\(invalidCount == 1 ? "y" : "ies")")
+        }
+
+        return parts.isEmpty ? "No feeds changed." : parts.joined(separator: ", ").capitalizedFirstLetter()
+    }
+}
+
 @MainActor
 final class ManualRSSFeedStore: ObservableObject {
     static let shared = ManualRSSFeedStore()
@@ -84,15 +108,62 @@ final class ManualRSSFeedStore: ObservableObject {
             throw ManualRSSFeedStoreError.duplicateFeed
         }
 
-        let resolvedURL = URL(string: normalizedURLString)!
-        let resolvedTitle = title?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .nonEmpty ?? Self.defaultTitle(for: resolvedURL)
-
-        let feed = ManualRSSFeed(title: resolvedTitle, urlString: normalizedURLString)
+        let feed = Self.makeFeed(
+            title: title,
+            normalizedURLString: normalizedURLString,
+            isEnabled: true
+        )
         feeds.append(feed)
         persist()
         return feed
+    }
+
+    func importOPML(data: Data) throws -> ManualRSSFeedImportResult {
+        let importedFeeds = try RSSOPMLCodec.importFeeds(from: data)
+        var updatedFeeds = feeds
+        var knownURLs = Set(feeds.compactMap { Self.normalizedURLString(for: $0.urlString) })
+        var importedCount = 0
+        var duplicateCount = 0
+        var invalidCount = 0
+
+        for importedFeed in importedFeeds {
+            guard let normalizedURLString = Self.normalizedURLString(for: importedFeed.urlString) else {
+                invalidCount += 1
+                continue
+            }
+
+            if knownURLs.contains(normalizedURLString) {
+                duplicateCount += 1
+                continue
+            }
+
+            updatedFeeds.append(
+                Self.makeFeed(
+                    title: importedFeed.title,
+                    normalizedURLString: normalizedURLString,
+                    isEnabled: importedFeed.isEnabled
+                )
+            )
+            knownURLs.insert(normalizedURLString)
+            importedCount += 1
+        }
+
+        guard importedCount > 0 || duplicateCount > 0 else {
+            throw RSSOPMLError.noImportableFeeds
+        }
+
+        feeds = updatedFeeds
+        persist()
+
+        return ManualRSSFeedImportResult(
+            importedCount: importedCount,
+            duplicateCount: duplicateCount,
+            invalidCount: invalidCount
+        )
+    }
+
+    func exportOPMLString() -> String {
+        RSSOPMLCodec.export(feeds: feeds)
     }
 
     func removeFeed(id: ManualRSSFeed.ID) {
@@ -145,10 +216,32 @@ final class ManualRSSFeedStore: ObservableObject {
         let host = url.host?.replacingOccurrences(of: "www.", with: "") ?? url.absoluteString
         return host
     }
+
+    private static func makeFeed(
+        title: String?,
+        normalizedURLString: String,
+        isEnabled: Bool
+    ) -> ManualRSSFeed {
+        let resolvedURL = URL(string: normalizedURLString)!
+        let resolvedTitle = title?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nonEmpty ?? Self.defaultTitle(for: resolvedURL)
+
+        return ManualRSSFeed(
+            title: resolvedTitle,
+            urlString: normalizedURLString,
+            isEnabled: isEnabled
+        )
+    }
 }
 
 private extension String {
     var nonEmpty: String? {
         isEmpty ? nil : self
+    }
+
+    func capitalizedFirstLetter() -> String {
+        guard let first else { return self }
+        return String(first).uppercased() + dropFirst()
     }
 }

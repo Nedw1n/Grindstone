@@ -4,9 +4,10 @@ import Foundation
 enum HNService {
 
     private static let topStoriesURL = URL(string: "https://hacker-news.firebaseio.com/v0/topstories.json")!
+    private static let maxConcurrentItemRequests = 15
 
     static func fetch(limit: Int = 60) async throws -> [FeedItem] {
-        let (data, response) = try await URLSession.shared.data(from: topStoriesURL)
+        let (data, response) = try await FeedNetworking.data(from: topStoriesURL)
         guard let httpResponse = response as? HTTPURLResponse,
               200 ..< 300 ~= httpResponse.statusCode else {
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
@@ -14,19 +15,41 @@ enum HNService {
         }
 
         let storyIDs = try JSONDecoder().decode([Int].self, from: data)
-        let rankedStoryIDs = Array(storyIDs.prefix(limit).enumerated())
+        let rankedStoryIDs = storyIDs
+            .prefix(limit)
+            .enumerated()
+            .map { RankedStoryReference(id: $0.element, rank: $0.offset) }
 
-        let items = await withTaskGroup(of: RankedFeedItem?.self) { group in
-            for (rank, storyID) in rankedStoryIDs {
+        let items = await fetchRankedItems(rankedStoryIDs)
+
+        guard !items.isEmpty else {
+            throw FeedFetchError.emptyResponse(source: Source.hn.rawValue)
+        }
+
+        return FeedRankingEngine.assignIntraSourceRanks(to: items)
+    }
+
+    private static func fetchRankedItems(_ rankedStoryIDs: [RankedStoryReference]) async -> [FeedItem] {
+        var iterator = rankedStoryIDs.makeIterator()
+
+        return await withTaskGroup(of: RankedFeedItem?.self) { group in
+            for _ in 0 ..< maxConcurrentItemRequests {
+                guard let story = iterator.next() else { break }
                 group.addTask {
-                    await fetchRankedItem(id: storyID, rank: rank)
+                    await fetchRankedItem(id: story.id, rank: story.rank)
                 }
             }
 
             var rankedItems: [RankedFeedItem] = []
-            for await rankedItem in group {
+
+            while let rankedItem = await group.next() {
                 if let rankedItem {
                     rankedItems.append(rankedItem)
+                }
+
+                guard let nextStory = iterator.next() else { continue }
+                group.addTask {
+                    await fetchRankedItem(id: nextStory.id, rank: nextStory.rank)
                 }
             }
 
@@ -34,18 +57,12 @@ enum HNService {
                 .sorted { $0.rank < $1.rank }
                 .map(\.item)
         }
-
-        guard !items.isEmpty else {
-            throw FeedFetchError.emptyResponse(source: Source.hn.rawValue)
-        }
-
-        return items
     }
 
     private static func fetchRankedItem(id: Int, rank: Int) async -> RankedFeedItem? {
         do {
             let itemURL = URL(string: "https://hacker-news.firebaseio.com/v0/item/\(id).json")!
-            let (data, response) = try await URLSession.shared.data(from: itemURL)
+            let (data, response) = try await FeedNetworking.data(from: itemURL)
             guard let httpResponse = response as? HTTPURLResponse,
                   200 ..< 300 ~= httpResponse.statusCode else {
                 return nil
@@ -65,6 +82,11 @@ enum HNService {
 private struct RankedFeedItem: Sendable {
     let rank: Int
     let item: FeedItem
+}
+
+private struct RankedStoryReference: Sendable {
+    let id: Int
+    let rank: Int
 }
 
 private struct HNItem: Decodable {
@@ -100,6 +122,7 @@ private struct HNItem: Decodable {
             commentCount: descendants,
             points: score,
             snippet: nil,
+            intraSourceRank: 0,
             crossRefs: []
         )
     }

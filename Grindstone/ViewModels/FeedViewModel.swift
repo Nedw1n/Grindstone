@@ -7,13 +7,16 @@ final class FeedViewModel: ObservableObject {
     @Published var items: [FeedItem] = []
     @Published var filter: Source? = nil
     @Published var isLoading = false
+    @Published var lastUpdatedAt: Date?
     @Published var errorMessage: String?
     @Published private var sourceItems: [Source: [FeedItem]] = [:]
     private let rssStore: ManualRSSFeedStore
     private var cancellables: Set<AnyCancellable> = []
+    private var hasPerformedInitialRefresh = false
 
     init(rssStore: ManualRSSFeedStore) {
         self.rssStore = rssStore
+        restoreCachedItems()
 
         rssStore.$feeds
             .dropFirst()
@@ -24,6 +27,12 @@ final class FeedViewModel: ObservableObject {
                 }
             }
             .store(in: &cancellables)
+    }
+
+    func refreshOnLaunch() async {
+        guard !hasPerformedInitialRefresh else { return }
+        hasPerformedInitialRefresh = true
+        await refresh()
     }
 
     /// Top item per source for the featured strip.
@@ -49,11 +58,13 @@ final class FeedViewModel: ObservableObject {
         errorMessage = nil
         let previousItems = items
         let previousSourceItems = sourceItems
+        let previousLastUpdatedAt = lastUpdatedAt
 
         let results = await FeedLoader.loadAll(from: sourceDefinitions)
         guard !Task.isCancelled else {
             items = previousItems
             sourceItems = previousSourceItems
+            lastUpdatedAt = previousLastUpdatedAt
             return
         }
 
@@ -61,6 +72,7 @@ final class FeedViewModel: ObservableObject {
         guard !nonCancelledResults.isEmpty else {
             items = previousItems
             sourceItems = previousSourceItems
+            lastUpdatedAt = previousLastUpdatedAt
             return
         }
 
@@ -71,8 +83,17 @@ final class FeedViewModel: ObservableObject {
         sourceItems = effectiveSourceItems
         items = mergedItems(from: effectiveSourceItems)
 
+        let successfulResults = nonCancelledResults.filter(\.wasSuccessful)
+        if !successfulResults.isEmpty {
+            let refreshedAt = Date()
+            lastUpdatedAt = refreshedAt
+            persistCache(sourceItems: effectiveSourceItems, lastUpdatedAt: refreshedAt)
+        } else {
+            lastUpdatedAt = previousLastUpdatedAt
+        }
+
         let failures = nonCancelledResults.compactMap(\.errorMessage)
-        let hasFreshItems = nonCancelledResults.contains { !$0.items.isEmpty }
+        let hasFreshItems = successfulResults.contains { !$0.items.isEmpty }
 
         if !failures.isEmpty {
             errorMessage = failures.joined(separator: "\n")
@@ -92,7 +113,7 @@ final class FeedViewModel: ObservableObject {
         var updated = previousSourceItems
 
         for result in results {
-            if !result.items.isEmpty {
+            if result.wasSuccessful {
                 updated[result.source] = result.items
             } else {
                 updated[result.source] = updated[result.source] ?? []
@@ -111,7 +132,19 @@ final class FeedViewModel: ObservableObject {
 
         let deduped = CrossRefEngine.deduplicate(mergeCandidates)
         let crossReffed = CrossRefEngine.compute(deduped)
-        return crossReffed.sorted { $0.publishedAt > $1.publishedAt }
+        return FeedRankingEngine.sortMergedItems(crossReffed)
+    }
+
+    private func restoreCachedItems() {
+        guard let snapshot = FeedCacheStore.load() else { return }
+        sourceItems = snapshot.sourceItems
+        items = mergedItems(from: snapshot.sourceItems)
+        lastUpdatedAt = snapshot.lastUpdatedAt
+    }
+
+    private func persistCache(sourceItems: [Source: [FeedItem]], lastUpdatedAt: Date) {
+        let snapshot = FeedCacheSnapshot(sourceItems: sourceItems, lastUpdatedAt: lastUpdatedAt)
+        FeedCacheStore.save(snapshot)
     }
 }
 
@@ -120,6 +153,7 @@ private struct SourceLoadResult: Sendable {
     let items: [FeedItem]
     let errorMessage: String?
     let wasCancelled: Bool
+    let wasSuccessful: Bool
 }
 
 private enum FeedLoader {
@@ -143,23 +177,28 @@ private enum FeedLoader {
         do {
             return SourceLoadResult(
                 source: definition.source,
-                items: try await definition.fetch(),
+                items: try await FeedRequestTimeout.run {
+                    try await definition.fetch()
+                },
                 errorMessage: nil,
-                wasCancelled: false
+                wasCancelled: false,
+                wasSuccessful: true
             )
         } catch is CancellationError {
             return SourceLoadResult(
                 source: definition.source,
                 items: [],
                 errorMessage: nil,
-                wasCancelled: true
+                wasCancelled: true,
+                wasSuccessful: false
             )
         } catch {
             return SourceLoadResult(
                 source: definition.source,
                 items: [],
                 errorMessage: "\(definition.source.rawValue): \(error.localizedDescription)",
-                wasCancelled: false
+                wasCancelled: false,
+                wasSuccessful: false
             )
         }
     }

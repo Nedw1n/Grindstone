@@ -14,7 +14,7 @@ enum RSSService {
     }
 
     static func fetch(url: URL, source: Source) async throws -> [FeedItem] {
-        let (data, response) = try await URLSession.shared.data(from: url)
+        let (data, response) = try await FeedNetworking.data(from: url)
         guard let httpResponse = response as? HTTPURLResponse,
               200 ..< 300 ~= httpResponse.statusCode else {
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
@@ -22,7 +22,7 @@ enum RSSService {
         }
 
         let parser = RSSParser(source: source)
-        let items = parser.parse(data: data)
+        let items = FeedRankingEngine.assignIntraSourceRanks(to: parser.parse(data: data))
 
         guard !items.isEmpty else {
             throw FeedFetchError.emptyResponse(source: source.rawValue)
@@ -56,15 +56,16 @@ enum ManualRSSService {
 
         let merged = CrossRefEngine.deduplicate(results.flatMap(\.items))
             .sorted { $0.publishedAt > $1.publishedAt }
+        let rankedItems = FeedRankingEngine.assignIntraSourceRanks(to: merged)
 
-        guard !merged.isEmpty else {
+        guard !rankedItems.isEmpty else {
             if let errorMessage = results.compactMap(\.errorMessage).first {
                 throw ManualRSSServiceError(message: errorMessage)
             }
             throw FeedFetchError.emptyResponse(source: Source.rss.rawValue)
         }
 
-        return Array(merged.prefix(limit))
+        return Array(rankedItems.prefix(limit))
     }
 
     private static func load(feed: ManualRSSFeed) async -> ManualRSSLoadResult {
@@ -87,6 +88,7 @@ enum ManualRSSService {
                     commentCount: item.commentCount,
                     points: item.points,
                     snippet: item.snippet,
+                    intraSourceRank: item.intraSourceRank,
                     crossRefs: []
                 )
             }
@@ -206,6 +208,7 @@ final class RSSParser: NSObject, XMLParserDelegate {
             commentCount: nil,
             points: nil,
             snippet: snippet.isEmpty ? nil : String(snippet.prefix(280)),
+            intraSourceRank: 0,
             crossRefs: []
         ))
     }
@@ -236,13 +239,5 @@ final class RSSParser: NSObject, XMLParserDelegate {
             }
         }
         return Date()
-    }
-}
-
-// MARK: - HTML Stripping
-
-private extension String {
-    func strippingHTML() -> String {
-        replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
     }
 }

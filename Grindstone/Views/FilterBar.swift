@@ -32,8 +32,10 @@ private struct FilterChip: View {
 
     var body: some View {
         Button(action: {
+#if os(iOS)
             let generator = UIImpactFeedbackGenerator(style: .light)
             generator.impactOccurred()
+#endif
             action()
         }) {
             Text(label)

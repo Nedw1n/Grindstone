@@ -5,6 +5,9 @@ enum BiotechService {
         BiotechProviderDefinition(name: "bioRxiv") {
             try await BioRxivService.fetch(limit: 12)
         },
+        BiotechProviderDefinition(name: "arXiv") {
+            try await ArXivBiotechService.fetch(limit: 10)
+        },
         BiotechProviderDefinition(name: "STAT") {
             try await StatNewsBiotechService.fetch(limit: 10)
         },
@@ -33,15 +36,16 @@ enum BiotechService {
 
         let merged = CrossRefEngine.deduplicate(results.flatMap(\.items))
             .sorted { $0.publishedAt > $1.publishedAt }
+        let rankedItems = FeedRankingEngine.assignIntraSourceRanks(to: merged)
 
-        guard !merged.isEmpty else {
+        guard !rankedItems.isEmpty else {
             if let errorMessage = results.compactMap(\.errorMessage).first {
                 throw BiotechProviderError(message: errorMessage)
             }
             throw FeedFetchError.emptyResponse(source: Source.biotech.rawValue)
         }
 
-        return Array(merged.prefix(limit))
+        return Array(rankedItems.prefix(limit))
     }
 
     private static func loadProvider(
@@ -94,6 +98,7 @@ private enum NatureBiotechService {
                 commentCount: nil,
                 points: nil,
                 snippet: item.snippet,
+                intraSourceRank: item.intraSourceRank,
                 crossRefs: []
             )
         }
@@ -131,7 +136,7 @@ private enum StatNewsBiotechService {
     ]
 
     static func fetch(limit: Int) async throws -> [FeedItem] {
-        let (data, response) = try await URLSession.shared.data(from: feedURL)
+        let (data, response) = try await FeedNetworking.data(from: feedURL)
         guard let httpResponse = response as? HTTPURLResponse,
               200 ..< 300 ~= httpResponse.statusCode else {
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
@@ -153,15 +158,17 @@ private enum StatNewsBiotechService {
                     commentCount: nil,
                     points: nil,
                     snippet: item.snippet,
+                    intraSourceRank: 0,
                     crossRefs: []
                 )
             }
+        let rankedItems = FeedRankingEngine.assignIntraSourceRanks(to: Array(items))
 
-        guard !items.isEmpty else {
+        guard !rankedItems.isEmpty else {
             throw FeedFetchError.emptyResponse(source: Source.biotech.rawValue)
         }
 
-        return Array(items)
+        return rankedItems
     }
 
     private static func isRelevant(_ item: ParsedRSSItem) -> Bool {
@@ -205,15 +212,16 @@ private enum BioRxivService {
 
         let items = CrossRefEngine.deduplicate(results.flatMap(\.items))
             .sorted { $0.publishedAt > $1.publishedAt }
+        let rankedItems = FeedRankingEngine.assignIntraSourceRanks(to: items)
 
-        guard !items.isEmpty else {
+        guard !rankedItems.isEmpty else {
             if let errorMessage = results.compactMap(\.errorMessage).first {
                 throw BiotechProviderError(message: errorMessage)
             }
             throw FeedFetchError.emptyResponse(source: Source.biotech.rawValue)
         }
 
-        return Array(items.prefix(limit))
+        return Array(rankedItems.prefix(limit))
     }
 
     private static func loadCategory(
@@ -248,10 +256,8 @@ private enum BioRxivService {
             URLQueryItem(name: "category", value: category),
         ]
 
-        var request = URLRequest(url: components.url!)
-        request.timeoutInterval = 12
-
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let request = URLRequest(url: components.url!)
+        let (data, response) = try await FeedNetworking.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse,
               200 ..< 300 ~= httpResponse.statusCode else {
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
@@ -281,6 +287,93 @@ private enum BioRxivService {
         let endDate = Date()
         let startDate = calendar.date(byAdding: .day, value: -daysBack, to: endDate) ?? endDate
         return (formatter.string(from: startDate), formatter.string(from: endDate))
+    }
+}
+
+private enum ArXivBiotechService {
+    private static let apiURL = URL(string: "https://export.arxiv.org/api/query")!
+    private static let qBioCategories = [
+        "q-bio.BM",
+        "q-bio.CB",
+        "q-bio.GN",
+        "q-bio.MN",
+        "q-bio.QM",
+        "q-bio.SC",
+        "q-bio.TO",
+    ]
+
+    private static let searchQuery = [
+        qBioCategories.map { "cat:\($0)" }.joined(separator: " OR "),
+        "(cat:cs.LG AND (all:biology OR all:biological OR all:bioinformatics OR all:genomics OR all:protein OR all:proteomics OR all:drug OR all:cell OR all:gene OR all:biomedical))",
+    ]
+    .map { "(\($0))" }
+    .joined(separator: " OR ")
+
+    private static let bioKeywords = [
+        "biology",
+        "biological",
+        "bioinformatics",
+        "biomedical",
+        "biotech",
+        "cell",
+        "crispr",
+        "drug",
+        "gene",
+        "genome",
+        "genomic",
+        "molecule",
+        "protein",
+        "proteomics",
+        "therapeutic",
+    ]
+
+    static func fetch(limit: Int) async throws -> [FeedItem] {
+        var components = URLComponents(url: apiURL, resolvingAgainstBaseURL: false)!
+        components.queryItems = [
+            URLQueryItem(name: "search_query", value: searchQuery),
+            URLQueryItem(name: "start", value: "0"),
+            URLQueryItem(name: "max_results", value: String(max(limit * 2, 18))),
+            URLQueryItem(name: "sortBy", value: "submittedDate"),
+            URLQueryItem(name: "sortOrder", value: "descending"),
+        ]
+
+        let request = URLRequest(url: components.url!)
+        let (data, response) = try await FeedNetworking.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              200 ..< 300 ~= httpResponse.statusCode else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+            throw FeedFetchError.badStatus(source: Source.biotech.rawValue, statusCode: statusCode)
+        }
+
+        let parser = ArXivAtomParser()
+        let parsedItems = parser.parse(data: data)
+            .filter(isRelevant)
+            .map(\.feedItem)
+            .sorted { $0.publishedAt > $1.publishedAt }
+
+        let dedupedItems = CrossRefEngine.deduplicate(parsedItems)
+        let finalItems = Array(dedupedItems.prefix(limit))
+        let rankedItems = FeedRankingEngine.assignIntraSourceRanks(to: finalItems)
+
+        guard !rankedItems.isEmpty else {
+            throw FeedFetchError.emptyResponse(source: Source.biotech.rawValue)
+        }
+
+        return rankedItems
+    }
+
+    private static func isRelevant(_ item: ParsedArXivItem) -> Bool {
+        let loweredCategories = Set(item.categories.map { $0.lowercased() })
+        if loweredCategories.contains(where: { $0.hasPrefix("q-bio.") }) {
+            return true
+        }
+
+        if loweredCategories.contains("cs.lg") || loweredCategories.contains("stat.ml") {
+            let haystack = "\(item.feedItem.title) \(item.feedItem.snippet ?? "")".lowercased()
+            return bioKeywords.contains { haystack.contains($0) }
+        }
+
+        return false
     }
 }
 
@@ -321,6 +414,7 @@ private struct BioRxivRecord: Decodable {
             commentCount: nil,
             points: nil,
             snippet: snippet?.isEmpty == true ? nil : String((snippet ?? "").prefix(280)),
+            intraSourceRank: 0,
             crossRefs: []
         )
     }
@@ -332,6 +426,141 @@ private struct ParsedRSSItem {
     let publishedAt: Date
     let snippet: String?
     let categories: [String]
+}
+
+private struct ParsedArXivItem {
+    let feedItem: FeedItem
+    let categories: [String]
+}
+
+private final class ArXivAtomParser: NSObject, XMLParserDelegate {
+    private var items: [ParsedArXivItem] = []
+    private var currentElement = ""
+    private var currentTitle = ""
+    private var currentSummary = ""
+    private var currentPublished = ""
+    private var currentIdentifier = ""
+    private var currentPrimaryLink = ""
+    private var currentCategories: [String] = []
+    private var isInsideEntry = false
+
+    func parse(data: Data) -> [ParsedArXivItem] {
+        let parser = XMLParser(data: data)
+        parser.delegate = self
+        parser.parse()
+        return items
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didStartElement element: String,
+        namespaceURI: String?,
+        qualifiedName: String?,
+        attributes: [String: String] = [:]
+    ) {
+        currentElement = element
+
+        if element == "entry" {
+            isInsideEntry = true
+            currentTitle = ""
+            currentSummary = ""
+            currentPublished = ""
+            currentIdentifier = ""
+            currentPrimaryLink = ""
+            currentCategories = []
+            return
+        }
+
+        guard isInsideEntry else { return }
+
+        if element == "link" {
+            let rel = attributes["rel"]?.lowercased()
+            let type = attributes["type"]?.lowercased()
+            if (rel == nil || rel == "alternate"), type == nil || type == "text/html" {
+                currentPrimaryLink = attributes["href"] ?? currentPrimaryLink
+            }
+        } else if element == "category", let term = attributes["term"]?.condensedWhitespace(), !term.isEmpty {
+            currentCategories.append(term)
+        }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        guard isInsideEntry else { return }
+
+        switch currentElement {
+        case "title":
+            currentTitle += string
+        case "summary":
+            currentSummary += string
+        case "published":
+            currentPublished += string
+        case "id":
+            currentIdentifier += string
+        default:
+            break
+        }
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didEndElement element: String,
+        namespaceURI: String?,
+        qualifiedName: String?
+    ) {
+        guard element == "entry", isInsideEntry else { return }
+        isInsideEntry = false
+
+        let title = currentTitle.condensedWhitespace()
+        let summary = currentSummary.condensedWhitespace()
+        let identifier = currentIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        let urlString = currentPrimaryLink.isEmpty ? identifier : currentPrimaryLink
+
+        guard
+            !title.isEmpty,
+            let url = URL(string: urlString)
+        else {
+            return
+        }
+
+        let publishedAt = Self.iso8601DateFormatter.date(
+            from: currentPublished.trimmingCharacters(in: .whitespacesAndNewlines)
+        ) ?? Self.fallbackDateFormatter.date(
+            from: currentPublished.trimmingCharacters(in: .whitespacesAndNewlines)
+        ) ?? Date()
+
+        items.append(
+            ParsedArXivItem(
+                feedItem: FeedItem(
+                    id: url.absoluteString,
+                    title: title,
+                    url: url,
+                    outlet: "arXiv",
+                    source: .biotech,
+                    publishedAt: publishedAt,
+                    commentCount: nil,
+                    points: nil,
+                    snippet: summary.isEmpty ? nil : String(summary.prefix(280)),
+                    intraSourceRank: 0,
+                    crossRefs: []
+                ),
+                categories: currentCategories
+            )
+        )
+    }
+
+    private static let iso8601DateFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        return formatter
+    }()
+
+    private static let fallbackDateFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        return formatter
+    }()
 }
 
 private final class StatNewsRSSParser: NSObject, XMLParserDelegate {
@@ -440,70 +669,4 @@ private final class StatNewsRSSParser: NSObject, XMLParserDelegate {
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         return formatter
     }()
-}
-
-private extension String {
-    func condensedWhitespace() -> String {
-        replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    func strippingHTML() -> String {
-        replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-    }
-
-    func decodingHTMLEntities() -> String {
-        var decoded = self
-        let namedEntities: [String: String] = [
-            "&amp;": "&",
-            "&quot;": "\"",
-            "&apos;": "'",
-            "&lt;": "<",
-            "&gt;": ">",
-            "&nbsp;": " ",
-            "&hellip;": "...",
-            "&mdash;": "-",
-            "&ndash;": "-",
-            "&ldquo;": "\"",
-            "&rdquo;": "\"",
-            "&lsquo;": "'",
-            "&rsquo;": "'",
-        ]
-
-        for (entity, replacement) in namedEntities {
-            decoded = decoded.replacingOccurrences(of: entity, with: replacement)
-        }
-
-        guard let regex = try? NSRegularExpression(pattern: #"&#(x?[0-9A-Fa-f]+);"#) else {
-            return decoded
-        }
-
-        let matches = regex.matches(in: decoded, range: NSRange(decoded.startIndex..., in: decoded))
-        guard !matches.isEmpty else { return decoded }
-
-        var output = decoded
-        for match in matches.reversed() {
-            guard
-                match.numberOfRanges > 1,
-                let tokenRange = Range(match.range(at: 1), in: output),
-                let fullRange = Range(match.range(at: 0), in: output)
-            else {
-                continue
-            }
-
-            let token = String(output[tokenRange])
-            let value: UInt32?
-
-            if token.hasPrefix("x") || token.hasPrefix("X") {
-                value = UInt32(token.dropFirst(), radix: 16)
-            } else {
-                value = UInt32(token, radix: 10)
-            }
-
-            guard let value, let scalar = UnicodeScalar(value) else { continue }
-            output.replaceSubrange(fullRange, with: String(Character(scalar)))
-        }
-
-        return output
-    }
 }

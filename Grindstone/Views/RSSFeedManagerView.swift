@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct RSSLibrarySummaryCard: View {
     let feedCount: Int
@@ -56,7 +57,11 @@ struct RSSFeedManagerView: View {
 
     @State private var draftTitle = ""
     @State private var draftURL = ""
-    @State private var errorMessage: String?
+    @State private var composerErrorMessage: String?
+    @State private var transferStatus: RSSLibraryTransferStatus?
+    @State private var isShowingOPMLImporter = false
+    @State private var isShowingOPMLExporter = false
+    @State private var exportDocument: RSSOPMLDocument?
 
     var body: some View {
         NavigationStack {
@@ -70,10 +75,16 @@ struct RSSFeedManagerView: View {
                         dismiss()
                     }
 
+                    RSSLibraryTransferCard(
+                        status: transferStatus,
+                        onImport: { isShowingOPMLImporter = true },
+                        onExport: prepareOPMLExport
+                    )
+
                     RSSComposerCard(
                         title: $draftTitle,
                         urlString: $draftURL,
-                        errorMessage: errorMessage,
+                        errorMessage: composerErrorMessage,
                         onAdd: addFeed
                     )
 
@@ -98,6 +109,20 @@ struct RSSFeedManagerView: View {
                     }
                 }
             }
+            .fileImporter(
+                isPresented: $isShowingOPMLImporter,
+                allowedContentTypes: [.opml, .xml]
+            ) { result in
+                importOPML(result)
+            }
+            .fileExporter(
+                isPresented: $isShowingOPMLExporter,
+                document: exportDocument,
+                contentType: .opml,
+                defaultFilename: "grindstone-rss-library"
+            ) { result in
+                exportOPML(result)
+            }
         }
 #if os(iOS)
         .presentationDetents([.medium, .large])
@@ -110,10 +135,61 @@ struct RSSFeedManagerView: View {
             _ = try rssStore.addFeed(title: draftTitle, urlString: draftURL)
             draftTitle = ""
             draftURL = ""
-            errorMessage = nil
+            composerErrorMessage = nil
         } catch {
-            errorMessage = error.localizedDescription
+            composerErrorMessage = error.localizedDescription
         }
+    }
+
+    private func prepareOPMLExport() {
+        transferStatus = nil
+        exportDocument = RSSOPMLDocument(text: rssStore.exportOPMLString())
+        isShowingOPMLExporter = true
+    }
+
+    private func importOPML(_ result: Result<URL, Error>) {
+        do {
+            let fileURL = try result.get()
+            let data = try readSecurityScopedData(from: fileURL)
+            let importResult = try rssStore.importOPML(data: data)
+            transferStatus = RSSLibraryTransferStatus(
+                message: importResult.summary,
+                tone: .success
+            )
+        } catch {
+            transferStatus = RSSLibraryTransferStatus(
+                message: error.localizedDescription,
+                tone: .error
+            )
+        }
+    }
+
+    private func exportOPML(_ result: Result<URL, Error>) {
+        defer { exportDocument = nil }
+
+        do {
+            let fileURL = try result.get()
+            transferStatus = RSSLibraryTransferStatus(
+                message: "Exported OPML to \(fileURL.lastPathComponent).",
+                tone: .success
+            )
+        } catch {
+            transferStatus = RSSLibraryTransferStatus(
+                message: error.localizedDescription,
+                tone: .error
+            )
+        }
+    }
+
+    private func readSecurityScopedData(from fileURL: URL) throws -> Data {
+        let didAccess = fileURL.startAccessingSecurityScopedResource()
+        defer {
+            if didAccess {
+                fileURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        return try Data(contentsOf: fileURL)
     }
 }
 
@@ -156,6 +232,50 @@ private struct RSSComposerCard: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(.indigo)
+        }
+        .padding(18)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        )
+    }
+}
+
+private struct RSSLibraryTransferCard: View {
+    let status: RSSLibraryTransferStatus?
+    let onImport: () -> Void
+    let onExport: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Import / Export", systemImage: "arrow.left.arrow.right.circle.fill")
+                .font(.headline)
+
+            Text("Bring an existing OPML library in, or export this setup as a backup you can move between readers.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 10) {
+                Button(action: onImport) {
+                    Label("Import OPML", systemImage: "square.and.arrow.down")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.indigo)
+
+                Button(action: onExport) {
+                    Label("Export OPML", systemImage: "square.and.arrow.up")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+
+            if let status {
+                Text(status.message)
+                    .font(.footnote)
+                    .foregroundStyle(status.tone.color)
+            }
         }
         .padding(18)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
@@ -268,7 +388,7 @@ private struct RSSLibraryStatPill: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(.white.opacity(0.55), in: Capsule())
+        .background(.ultraThinMaterial, in: Capsule())
     }
 }
 
@@ -279,5 +399,24 @@ private struct RSSInlineNavigationTitleDisplayMode: ViewModifier {
 #else
         content
 #endif
+    }
+}
+
+private struct RSSLibraryTransferStatus {
+    let message: String
+    let tone: RSSLibraryTransferTone
+}
+
+private enum RSSLibraryTransferTone {
+    case success
+    case error
+
+    var color: Color {
+        switch self {
+        case .success:
+            return .secondary
+        case .error:
+            return .red
+        }
     }
 }

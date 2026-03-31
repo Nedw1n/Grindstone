@@ -1,23 +1,27 @@
 import SwiftUI
 
 struct FeedItemRow: View {
+    @EnvironmentObject private var feedUserState: FeedUserStateStore
     let item: FeedItem
     var showPreview: Bool = true
 
     var body: some View {
+        let isRead = feedUserState.isRead(item)
+        let isSaved = feedUserState.isSaved(item)
+
         VStack(alignment: .leading, spacing: 6) {
             // Title
             Text(item.title)
                 .font(.headline)
                 .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
-                .foregroundStyle(.primary)
+                .foregroundStyle(isRead ? .secondary : .primary)
 
             // Snippet
             if showPreview, let snippet = item.snippet {
                 Text(snippet)
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isRead ? .tertiary : .secondary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -46,6 +50,12 @@ struct FeedItemRow: View {
 
                 Spacer()
 
+                if isSaved {
+                    Image(systemName: "bookmark.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.indigo)
+                }
+
                 Text(item.publishedAt.relativeFormatted)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
@@ -65,7 +75,26 @@ struct FeedItemRow: View {
         }
         .padding(.vertical, 10)
         .padding(.horizontal)
+        .opacity(isRead ? 0.72 : 1)
         .contextMenu {
+            Button {
+                feedUserState.toggleSaved(item)
+            } label: {
+                Label(
+                    isSaved ? "Remove Bookmark" : "Save for Later",
+                    systemImage: isSaved ? "bookmark.slash" : "bookmark"
+                )
+            }
+
+            Button {
+                feedUserState.toggleReadState(for: item)
+            } label: {
+                Label(
+                    isRead ? "Mark as Unread" : "Mark as Read",
+                    systemImage: isRead ? "envelope.badge" : "checkmark.circle"
+                )
+            }
+
             ShareLink(item: item.url)
         }
     }
@@ -77,4 +106,11 @@ struct FeedItemRow: View {
         FeedItemRow(item: FeedItem.mock[1])
     }
     .listStyle(.plain)
+    .environmentObject({
+        let defaults = UserDefaults(suiteName: "FeedItemRowPreview")!
+        let store = FeedUserStateStore(defaults: defaults)
+        store.save(FeedItem.mock[0])
+        store.markRead(FeedItem.mock[1])
+        return store
+    }())
 }

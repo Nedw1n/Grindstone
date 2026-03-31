@@ -29,7 +29,7 @@ enum CrossRefEngine {
             let key = item.normalizedURL
             if let existingIndex = seen[key] {
                 let existing = result[existingIndex]
-                if metadataScore(item) > metadataScore(existing) {
+                if shouldReplace(existing: existing, with: item) {
                     result[existingIndex] = item
                 }
             } else {
@@ -47,5 +47,20 @@ enum CrossRefEngine {
         if item.snippet != nil { score += 1 }
         if item.outlet != nil { score += 1 }
         return score
+    }
+
+    private static func shouldReplace(existing: FeedItem, with candidate: FeedItem) -> Bool {
+        let existingMetadataScore = metadataScore(existing)
+        let candidateMetadataScore = metadataScore(candidate)
+
+        if candidateMetadataScore != existingMetadataScore {
+            return candidateMetadataScore > existingMetadataScore
+        }
+
+        if candidate.intraSourceRank != existing.intraSourceRank {
+            return candidate.intraSourceRank > existing.intraSourceRank
+        }
+
+        return candidate.publishedAt > existing.publishedAt
     }
 }
