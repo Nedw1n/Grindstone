@@ -2,29 +2,33 @@ import SwiftUI
 
 struct SavedArticlesView: View {
     @EnvironmentObject private var feedUserState: FeedUserStateStore
-    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var preferences: FeedPreferences
+    @State private var isConfirmingRemoveAll = false
 
     var body: some View {
         NavigationStack {
             Group {
                 if feedUserState.savedItems.isEmpty {
-                    ContentUnavailableView(
-                        "No Saved Articles",
-                        systemImage: "bookmark",
-                        description: Text("Save stories from the feed to keep a short reading list here.")
-                    )
+                    ContentUnavailableView {
+                        Label("No Saved Stories", systemImage: "bookmark")
+                    } description: {
+                        Text("Swipe a story to the right, or hold it and choose Save for Later. It will wait for you here.")
+                    }
                 } else {
                     List {
                         ForEach(feedUserState.savedItems) { item in
-                            NavigationLink(value: item) {
-                                FeedItemRow(item: item)
+                            ArticleLink(destination: .article(item)) {
+                                FeedItemRow(item: item, showPreview: preferences.showPreviews)
                             }
-                            .swipeActions {
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button(role: .destructive) {
                                     feedUserState.unsave(item)
                                 } label: {
                                     Label("Remove", systemImage: "bookmark.slash")
                                 }
+                            }
+                            .swipeActions(edge: .leading) {
+                                ReadSwipeButton(item: item)
                             }
                         }
                     }
@@ -32,31 +36,51 @@ struct SavedArticlesView: View {
                 }
             }
             .navigationTitle("Saved")
-            .navigationDestination(for: FeedItem.self) { item in
-                DetailView(item: item)
-            }
+            .navigationSubtitle(subtitle)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") {
-                        dismiss()
+                if !feedUserState.savedItems.isEmpty {
+                    ToolbarItem(placement: .primaryAction) {
+                        Menu {
+                            Button("Mark All as Read", systemImage: "checkmark.circle") {
+                                feedUserState.markRead(feedUserState.savedItems)
+                            }
+                            .disabled(feedUserState.unreadCount(in: feedUserState.savedItems) == 0)
+
+                            Button("Remove All", systemImage: "trash", role: .destructive) {
+                                isConfirmingRemoveAll = true
+                            }
+                        } label: {
+                            Label("Options", systemImage: "ellipsis.circle")
+                        }
                     }
                 }
             }
+            .confirmationDialog(
+                "Remove all saved stories?",
+                isPresented: $isConfirmingRemoveAll,
+                titleVisibility: .visible
+            ) {
+                Button("Remove All", role: .destructive) {
+                    feedUserState.clearSavedItems()
+                }
+            }
+            .navigationDestination(for: ArticleDestination.self) { destination in
+                DetailView(destination: destination)
+            }
         }
-#if os(iOS)
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
-#endif
+    }
+
+    private var subtitle: String {
+        let items = feedUserState.savedItems
+        guard !items.isEmpty else { return "" }
+
+        let unread = feedUserState.unreadCount(in: items)
+        let countText = items.count == 1 ? "1 story" : "\(items.count) stories"
+        return unread == 0 ? countText : "\(countText) · \(unread) unread"
     }
 }
 
 #Preview {
     SavedArticlesView()
-        .environmentObject({
-            let defaults = UserDefaults(suiteName: "SavedArticlesViewPreview")!
-            let store = FeedUserStateStore(defaults: defaults)
-            store.save(FeedItem.mock[0])
-            store.save(FeedItem.mock[1])
-            return store
-        }())
+        .previewEnvironment()
 }

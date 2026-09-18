@@ -8,7 +8,12 @@ enum Source: String, CaseIterable, Identifiable, Hashable, Codable, Sendable {
     case biotech = "Biotech"
     case rss = "RSS"
 
+    /// Sources that get a card in the featured strip.
     static let featuredSources: [Source] = [.hn, .memo, .biotech]
+
+    /// Sources with a fixed upstream that the user can switch on or off in Settings.
+    /// RSS is always present because the user curates it feed by feed.
+    static let builtInSources: [Source] = [.hn, .memo, .biotech]
 
     var id: String { rawValue }
 
@@ -18,6 +23,16 @@ enum Source: String, CaseIterable, Identifiable, Hashable, Codable, Sendable {
         case .memo: return "Memo"
         case .biotech: return "Bio"
         case .rss: return "RSS"
+        }
+    }
+
+    /// One-line description shown under the source name in Settings.
+    var summary: String {
+        switch self {
+        case .hn: return "Front page stories, ranked as on the site"
+        case .memo: return "Top political and media stories of the moment"
+        case .biotech: return "bioRxiv, arXiv q-bio, STAT, and Nature Biotechnology"
+        case .rss: return "Blogs and publications you add yourself"
         }
     }
 

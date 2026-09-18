@@ -1,22 +1,38 @@
 import SwiftUI
 
 struct FeaturedStrip: View {
-    @EnvironmentObject private var feedUserState: FeedUserStateStore
     let items: [FeedItem]
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 12) {
-                ForEach(items) { item in
-                    NavigationLink(value: item) {
-                        FeaturedCard(item: item)
-                    }
-                    .buttonStyle(.plain)
-                }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles")
+                    .foregroundStyle(Color.accentColor)
+                Text("Top Stories")
+                    .font(.headline)
+                Spacer()
+                Text("Cross-posted first")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             .padding(.horizontal)
-            .padding(.vertical, 8)
+
+            ScrollView(.horizontal) {
+                HStack(spacing: 12) {
+                    ForEach(items) { item in
+                        ArticleLink(destination: .article(item)) {
+                            FeaturedCard(item: item)
+                        }
+                    }
+                }
+                .padding(.horizontal)
+                .scrollTargetLayout()
+            }
+            .scrollIndicators(.hidden)
+            .scrollTargetBehavior(.viewAligned)
         }
+        .padding(.top, 8)
+        .padding(.bottom, 12)
     }
 }
 
@@ -29,86 +45,81 @@ private struct FeaturedCard: View {
         let isSaved = feedUserState.isSaved(item)
 
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
+            HStack(spacing: 6) {
                 SourceTag(source: item.source)
-                Spacer()
-                HStack(spacing: 6) {
-                    if isSaved {
-                        Image(systemName: "bookmark.fill")
-                            .font(.caption)
-                            .foregroundStyle(.indigo)
+
+                if !item.crossRefs.isEmpty {
+                    Image(systemName: "link")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    ForEach(item.orderedCrossRefs) { source in
+                        SourceTag(source: source, style: .compact)
                     }
-                    if !item.crossRefs.isEmpty {
-                        Image(systemName: "link")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                }
+
+                Spacer(minLength: 0)
+
+                if isSaved {
+                    Image(systemName: "bookmark.fill")
+                        .font(.caption)
+                        .foregroundStyle(Color.accentColor)
                 }
             }
 
             Text(item.title)
-                .font(.subheadline.weight(.semibold))
+                .font(.headline)
                 .lineLimit(3)
+                .multilineTextAlignment(.leading)
                 .foregroundStyle(isRead ? .secondary : .primary)
 
-            Spacer()
+            Spacer(minLength: 0)
 
-            HStack {
+            HStack(spacing: 8) {
+                if let outlet = item.displayOutlet {
+                    Text(outlet)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 4)
+
                 if let points = item.points {
-                    Label("\(points)", systemImage: "arrow.up")
-                        .font(.caption2)
+                    Label(points.compactFormatted, systemImage: "arrow.up")
                 }
+
                 if let comments = item.commentCount {
-                    Label("\(comments)", systemImage: "bubble.right")
-                        .font(.caption2)
+                    Label(comments.compactFormatted, systemImage: "bubble.right")
                 }
-                Spacer()
+
                 Text(item.publishedAt.relativeFormatted)
-                    .font(.caption2)
             }
+            .font(.caption)
             .foregroundStyle(.secondary)
+            .labelStyle(.titleAndIcon)
+            .lineLimit(1)
         }
-        .padding(12)
-        .frame(width: 220, height: 150, alignment: .topLeading)
-        .opacity(isRead ? 0.74 : 1)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(item.source.color.opacity(0.3), lineWidth: 1)
+        .padding(14)
+        .frame(width: 264, height: 160, alignment: .topLeading)
+        .background(
+            LinearGradient(
+                colors: [item.source.color.opacity(0.22), item.source.color.opacity(0.05)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
+            in: RoundedRectangle(cornerRadius: 20, style: .continuous)
         )
-        .contextMenu {
-            Button {
-                feedUserState.toggleSaved(item)
-            } label: {
-                Label(
-                    isSaved ? "Remove Bookmark" : "Save for Later",
-                    systemImage: isSaved ? "bookmark.slash" : "bookmark"
-                )
-            }
-
-            Button {
-                feedUserState.toggleReadState(for: item)
-            } label: {
-                Label(
-                    isRead ? "Mark as Unread" : "Mark as Read",
-                    systemImage: isRead ? "envelope.badge" : "checkmark.circle"
-                )
-            }
-
-            ShareLink(item: item.url)
-        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(item.source.color.opacity(0.25), lineWidth: 1)
+        )
+        .opacity(isRead ? 0.75 : 1)
+        .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .modifier(FeedItemContextMenu(item: item))
     }
 }
 
 #Preview {
     NavigationStack {
-        FeaturedStrip(items: Array(FeedItem.mock.prefix(3)))
+        FeaturedStrip(items: Array(FeedItem.mock.prefix(4)))
     }
-    .environmentObject({
-        let defaults = UserDefaults(suiteName: "FeaturedStripPreview")!
-        let store = FeedUserStateStore(defaults: defaults)
-        store.save(FeedItem.mock[0])
-        store.markRead(FeedItem.mock[1])
-        return store
-    }())
+    .previewEnvironment()
 }

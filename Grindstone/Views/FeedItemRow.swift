@@ -4,99 +4,82 @@ struct FeedItemRow: View {
     @EnvironmentObject private var feedUserState: FeedUserStateStore
     let item: FeedItem
     var showPreview: Bool = true
+    var now: Date = Date()
 
     var body: some View {
         let isRead = feedUserState.isRead(item)
         let isSaved = feedUserState.isSaved(item)
 
-        VStack(alignment: .leading, spacing: 6) {
-            // Title
-            Text(item.title)
-                .font(.headline)
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
-                .foregroundStyle(isRead ? .secondary : .primary)
+        HStack(alignment: .top, spacing: 10) {
+            Circle()
+                .fill(isRead ? Color.clear : Color.accentColor)
+                .frame(width: 7, height: 7)
+                .padding(.top, 7)
+                .accessibilityHidden(true)
 
-            // Snippet
-            if showPreview, let snippet = item.snippet {
-                Text(snippet)
-                    .font(.subheadline)
-                    .foregroundStyle(isRead ? .tertiary : .secondary)
-                    .lineLimit(2)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(item.title)
+                    .font(.headline.weight(isRead ? .regular : .semibold))
+                    .foregroundStyle(isRead ? .secondary : .primary)
+                    .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
-            }
 
-            // Metadata row
-            HStack(spacing: 8) {
-                SourceTag(source: item.source)
-
-                if let outlet = item.outlet {
-                    Text(outlet)
-                        .font(.caption)
+                if showPreview, let snippet = item.snippet {
+                    Text(snippet)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
-                if let points = item.points {
-                    Label("\(points)", systemImage: "arrow.up")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                HStack(spacing: 6) {
+                    SourceTag(source: item.source)
 
-                if let comments = item.commentCount {
-                    Label("\(comments)", systemImage: "bubble.right")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                    if let outlet = item.displayOutlet {
+                        Text(outlet)
+                            .lineLimit(1)
+                    }
 
-                Spacer()
+                    Text("·")
+                    Text(item.publishedAt.relativeFormatted(relativeTo: now))
 
-                if isSaved {
-                    Image(systemName: "bookmark.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.indigo)
-                }
+                    Spacer(minLength: 8)
 
-                Text(item.publishedAt.relativeFormatted)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
+                    if let points = item.points {
+                        Label(points.compactFormatted, systemImage: "arrow.up")
+                    }
 
-            // Cross-reference badges
-            if !item.crossRefs.isEmpty {
-                HStack(spacing: 4) {
-                    Image(systemName: "link")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    ForEach(item.crossRefs, id: \.self) { ref in
-                        SourceTag(source: ref, style: .compact)
+                    if let comments = item.commentCount {
+                        Label(comments.compactFormatted, systemImage: "bubble.right")
+                    }
+
+                    if isSaved {
+                        Image(systemName: "bookmark.fill")
+                            .foregroundStyle(Color.accentColor)
                     }
                 }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .labelStyle(.titleAndIcon)
+                .lineLimit(1)
+
+                if !item.crossRefs.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "link")
+                        Text("Also on")
+                        ForEach(item.orderedCrossRefs) { source in
+                            SourceTag(source: source, style: .compact)
+                        }
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
             }
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal)
-        .opacity(isRead ? 0.72 : 1)
-        .contextMenu {
-            Button {
-                feedUserState.toggleSaved(item)
-            } label: {
-                Label(
-                    isSaved ? "Remove Bookmark" : "Save for Later",
-                    systemImage: isSaved ? "bookmark.slash" : "bookmark"
-                )
-            }
-
-            Button {
-                feedUserState.toggleReadState(for: item)
-            } label: {
-                Label(
-                    isRead ? "Mark as Unread" : "Mark as Read",
-                    systemImage: isRead ? "envelope.badge" : "checkmark.circle"
-                )
-            }
-
-            ShareLink(item: item.url)
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .modifier(FeedItemContextMenu(item: item))
     }
 }
 
@@ -104,13 +87,8 @@ struct FeedItemRow: View {
     List {
         FeedItemRow(item: FeedItem.mock[0])
         FeedItemRow(item: FeedItem.mock[1])
+        FeedItemRow(item: FeedItem.mock[3])
     }
     .listStyle(.plain)
-    .environmentObject({
-        let defaults = UserDefaults(suiteName: "FeedItemRowPreview")!
-        let store = FeedUserStateStore(defaults: defaults)
-        store.save(FeedItem.mock[0])
-        store.markRead(FeedItem.mock[1])
-        return store
-    }())
+    .previewEnvironment()
 }

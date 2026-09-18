@@ -12,6 +12,9 @@ struct FeedItem: Identifiable, Hashable, Codable, Sendable {
     let snippet: String?
     var intraSourceRank: Double
     var crossRefs: [Source]
+    /// Where the conversation about this story lives (Hacker News thread,
+    /// Memeorandum cluster, blog comments). `nil` when the source has none.
+    var discussionURL: URL? = nil
 
     /// URL normalized for cross-reference matching.
     /// Strips tracking parameters, trailing slashes, and lowercases the host.
@@ -34,6 +37,22 @@ struct FeedItem: Identifiable, Hashable, Codable, Sendable {
             result.removeLast()
         }
         return result
+    }
+
+    /// The outlet name when the source supplied one, otherwise the article's host
+    /// (e.g. "github.com"). Hacker News items never carry an outlet, so this keeps
+    /// every row labelled with where the link actually goes.
+    var displayOutlet: String? {
+        if let outlet, !outlet.isEmpty {
+            return outlet
+        }
+        guard let host = url.host?.lowercased() else { return nil }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+
+    /// Cross-references in the app's canonical source order, so badges never shuffle.
+    var orderedCrossRefs: [Source] {
+        Source.allCases.filter { crossRefs.contains($0) }
     }
 
     static func == (lhs: FeedItem, rhs: FeedItem) -> Bool {
@@ -61,7 +80,8 @@ extension FeedItem {
             points: 340,
             snippet: "NVIDIA, AMD, and a wave of startups are competing for dominance in the AI accelerator market.",
             intraSourceRank: 1.0,
-            crossRefs: [.memo]
+            crossRefs: [.memo],
+            discussionURL: URL(string: "https://news.ycombinator.com/item?id=1")
         ),
         FeedItem(
             id: "https://example.com/fed-rate-hold",
@@ -90,9 +110,9 @@ extension FeedItem {
             crossRefs: []
         ),
         FeedItem(
-            id: "https://example.com/rust-linux-kernel",
+            id: "https://github.com/rust-for-linux/linux",
             title: "Rust in the Linux Kernel: Year Two",
-            url: URL(string: "https://example.com/rust-linux-kernel")!,
+            url: URL(string: "https://github.com/rust-for-linux/linux")!,
             outlet: nil,
             source: .hn,
             publishedAt: Date().addingTimeInterval(-14400),
@@ -100,7 +120,8 @@ extension FeedItem {
             points: 512,
             snippet: nil,
             intraSourceRank: 0.61,
-            crossRefs: []
+            crossRefs: [],
+            discussionURL: URL(string: "https://news.ycombinator.com/item?id=2")
         ),
         FeedItem(
             id: "https://example.com/biotech-crispr-trial",
@@ -131,6 +152,7 @@ extension FeedItem {
         case snippet
         case intraSourceRank
         case crossRefs
+        case discussionURL
     }
 
     init(from decoder: Decoder) throws {
@@ -146,7 +168,8 @@ extension FeedItem {
             points: try container.decodeIfPresent(Int.self, forKey: .points),
             snippet: try container.decodeIfPresent(String.self, forKey: .snippet),
             intraSourceRank: try container.decodeIfPresent(Double.self, forKey: .intraSourceRank) ?? 0,
-            crossRefs: try container.decodeIfPresent([Source].self, forKey: .crossRefs) ?? []
+            crossRefs: try container.decodeIfPresent([Source].self, forKey: .crossRefs) ?? [],
+            discussionURL: try container.decodeIfPresent(URL.self, forKey: .discussionURL)
         )
     }
 }

@@ -19,11 +19,22 @@ enum FeedSourceCatalog {
         },
     ]
 
-    static func definitions(rssFeeds: [ManualRSSFeed]) -> [FeedSourceDefinition] {
-        builtInDefinitions + [
-            FeedSourceDefinition(source: .rss, mergeLimit: 20) {
-                try await ManualRSSService.fetch(feeds: rssFeeds, limit: 32)
-            },
-        ]
+    /// Definitions for every source the user has switched on. RSS is included
+    /// whenever at least one manual feed is enabled.
+    static func definitions(
+        rssFeeds: [ManualRSSFeed],
+        enabledSources: Set<Source>
+    ) -> [FeedSourceDefinition] {
+        var definitions = builtInDefinitions.filter { enabledSources.contains($0.source) }
+
+        if rssFeeds.contains(where: \.isEnabled) {
+            definitions.append(
+                FeedSourceDefinition(source: .rss, mergeLimit: 20) {
+                    try await ManualRSSService.fetch(feeds: rssFeeds, limit: 32)
+                }
+            )
+        }
+
+        return definitions
     }
 }

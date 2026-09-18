@@ -191,7 +191,8 @@ private struct MemoHomepageItem {
             points: nil,
             snippet: resolvedSnippet,
             intraSourceRank: 0,
-            crossRefs: []
+            crossRefs: [],
+            discussionURL: metadata?.url
         )
     }
 

@@ -1,30 +1,60 @@
 import SwiftUI
-#if os(iOS)
-import SafariServices
-#elseif os(macOS)
+#if os(macOS)
 import WebKit
 #endif
 
+/// In-app reader used when a story is pushed onto a navigation stack (macOS,
+/// visionOS). iOS presents `SafariView` full screen through `ArticleRouter`.
 struct DetailView: View {
     @EnvironmentObject private var feedUserState: FeedUserStateStore
-    let item: FeedItem
+    let destination: ArticleDestination
+    @State private var kind: ArticleDestination.Kind
+
+    init(destination: ArticleDestination) {
+        self.destination = destination
+        _kind = State(initialValue: destination.kind)
+    }
+
+    private var item: FeedItem { destination.item }
+
+    private var currentURL: URL {
+        switch kind {
+        case .article:
+            return item.url
+        case .discussion:
+            return item.discussionURL ?? item.url
+        }
+    }
 
     var body: some View {
-        detailContent
+        content
             .navigationTitle(item.title)
             .modifier(InlineNavigationTitleDisplayMode())
             .toolbar {
-#if os(iOS)
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    bookmarkButton
-                    ShareLink(item: item.url)
-                }
-#else
                 ToolbarItemGroup(placement: .automatic) {
-                    bookmarkButton
-                    ShareLink(item: item.url)
+                    if item.discussionURL != nil {
+                        Picker("View", selection: $kind) {
+                            Text("Article").tag(ArticleDestination.Kind.article)
+                            Text("Comments").tag(ArticleDestination.Kind.discussion)
+                        }
+                        .pickerStyle(.segmented)
+                    }
+
+                    Button {
+                        feedUserState.toggleSaved(item)
+                    } label: {
+                        Label(
+                            feedUserState.isSaved(item) ? "Unsave" : "Save",
+                            systemImage: feedUserState.isSaved(item) ? "bookmark.fill" : "bookmark"
+                        )
+                    }
+
+                    Link(destination: currentURL) {
+                        Label("Open in Browser", systemImage: "safari")
+                    }
+
+                    ShareLink(item: currentURL)
                 }
-#endif
             }
             .task {
                 feedUserState.markRead(item)
@@ -32,41 +62,26 @@ struct DetailView: View {
     }
 
     @ViewBuilder
-    private var detailContent: some View {
-#if os(iOS)
-        SafariView(url: item.url)
+    private var content: some View {
+#if os(macOS)
+        WebView(url: currentURL)
+#elseif os(iOS)
+        SafariView(url: currentURL)
             .ignoresSafeArea()
-#elseif os(macOS)
-        WebView(url: item.url)
 #else
-        Link("Open in Browser", destination: item.url)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        ContentUnavailableView {
+            Label(item.title, systemImage: "safari")
+        } description: {
+            Text(item.displayOutlet ?? "")
+        } actions: {
+            Link("Open in Browser", destination: currentURL)
+                .buttonStyle(.borderedProminent)
+        }
 #endif
     }
-
-    private var bookmarkButton: some View {
-        Button {
-            feedUserState.toggleSaved(item)
-        } label: {
-            Image(systemName: feedUserState.isSaved(item) ? "bookmark.fill" : "bookmark")
-        }
-    }
 }
 
-/// Wraps SFSafariViewController for in-app article reading.
-#if os(iOS)
-struct SafariView: UIViewControllerRepresentable {
-    let url: URL
-
-    func makeUIViewController(context: Context) -> SFSafariViewController {
-        let config = SFSafariViewController.Configuration()
-        config.entersReaderIfAvailable = true
-        return SFSafariViewController(url: url, configuration: config)
-    }
-
-    func updateUIViewController(_ uiViewController: SFSafariViewController, context: Context) {}
-}
-#elseif os(macOS)
+#if os(macOS)
 private struct WebView: NSViewRepresentable {
     let url: URL
 
@@ -78,8 +93,21 @@ private struct WebView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        guard webView.url != url else { return }
+        guard context.coordinator.loadedURL != url else { return }
+        context.coordinator.loadedURL = url
         webView.load(URLRequest(url: url))
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(loadedURL: url)
+    }
+
+    final class Coordinator {
+        var loadedURL: URL
+
+        init(loadedURL: URL) {
+            self.loadedURL = loadedURL
+        }
     }
 }
 #endif
