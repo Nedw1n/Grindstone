@@ -16,12 +16,13 @@ struct SourceTag: View {
             Text(source.shortName)
         }
         .font(style == .compact ? .caption2 : .caption)
-        .fontWeight(.medium)
+        .fontWeight(.semibold)
         .padding(.horizontal, style == .compact ? 5 : 7)
         .padding(.vertical, 2)
-        .background(source.color.opacity(0.12))
+        .background(source.color.opacity(0.14), in: Capsule())
         .foregroundStyle(source.color)
-        .clipShape(Capsule())
+        .fixedSize()
+        .accessibilityLabel(source.rawValue)
     }
 }
 
@@ -29,6 +30,7 @@ struct SourceTag: View {
     HStack {
         SourceTag(source: .hn)
         SourceTag(source: .memo)
+        SourceTag(source: .biotech)
         SourceTag(source: .rss, style: .compact)
     }
     .padding()

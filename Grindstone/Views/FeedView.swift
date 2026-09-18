@@ -1,279 +1,213 @@
 import SwiftUI
+import Combine
 
 struct FeedView: View {
     @EnvironmentObject private var vm: FeedViewModel
     @EnvironmentObject private var feedUserState: FeedUserStateStore
     @EnvironmentObject private var rssStore: ManualRSSFeedStore
-    @AppStorage("showPreviews") private var showPreviews = true
+    @EnvironmentObject private var preferences: FeedPreferences
+
     @State private var isShowingRSSLibrary = false
-    @State private var isShowingSavedArticles = false
-    @State private var searchText = ""
+    @State private var isConfirmingMarkAllRead = false
+    @State private var now = Date()
+
+    /// Re-renders relative timestamps ("3m ago") once a minute.
+    private let clock = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 0) {
-                    if !vm.featured.isEmpty && searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            List {
+                if vm.filter == nil, !vm.featured.isEmpty {
+                    Section {
                         FeaturedStrip(items: vm.featured)
-                            .padding(.bottom, 8)
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
                     }
+                }
 
-                    FilterBar(selection: $vm.filter)
-                        .padding(.horizontal)
-                        .padding(.bottom, 4)
-
-                    if vm.lastUpdatedAt != nil || (vm.isLoading && !vm.items.isEmpty) {
-                        FeedRefreshStatusRow(
-                            lastUpdatedAt: vm.lastUpdatedAt,
-                            isRefreshing: vm.isLoading
+                Section {
+                    if !vm.failures.isEmpty {
+                        FeedFailureBanner(
+                            failures: vm.failures,
+                            onRetry: { Task { await vm.refresh() } },
+                            onDismiss: { vm.dismissFailures() }
                         )
-                        .padding(.horizontal)
-                        .padding(.bottom, 8)
+                        .listRowSeparator(.hidden)
                     }
 
-                    if let errorMessage = vm.errorMessage {
-                        HStack(alignment: .top, spacing: 8) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                            Text(errorMessage)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(12)
-                        .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-                        .padding(.horizontal)
-                        .padding(.bottom, 8)
-                    }
-
-                    if vm.filter == .rss {
-                        RSSLibrarySummaryCard(
-                            feedCount: rssStore.feeds.count,
-                            enabledCount: rssStore.enabledFeeds.count,
-                            actionTitle: rssStore.feeds.isEmpty ? "Add Feed" : "Manage"
-                        ) {
+                    if isRSSLaneUnconfigured {
+                        RSSLibraryPromptRow(hasFeeds: !rssStore.feeds.isEmpty) {
                             isShowingRSSLibrary = true
                         }
-                        .padding(.horizontal)
-                        .padding(.bottom, 10)
+                        .listRowSeparator(.hidden)
                     }
 
-                    if filteredItems.isEmpty {
-                        if trimmedSearchText.isEmpty {
-                            FeedEmptyStateCard(
-                                filter: vm.filter,
-                                hasRSSFeeds: !rssStore.feeds.isEmpty
-                            ) {
-                                isShowingRSSLibrary = true
-                            }
-                            .padding(.horizontal)
-                            .padding(.top, 24)
-                        } else {
-                            FeedSearchEmptyStateCard(query: trimmedSearchText)
-                                .padding(.horizontal)
-                                .padding(.top, 24)
+                    if visibleItems.isEmpty {
+                        if !vm.isLoading, !isRSSLaneUnconfigured {
+                            emptyState
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 24)
+                                .listRowSeparator(.hidden)
                         }
                     } else {
-                        LazyVStack(spacing: 0) {
-                            ForEach(filteredItems) { item in
-                                NavigationLink(value: item) {
-                                    FeedItemRow(item: item, showPreview: showPreviews)
-                                }
-                                .buttonStyle(.plain)
-                                Divider().padding(.leading)
+                        ForEach(visibleItems) { item in
+                            ArticleLink(destination: .article(item)) {
+                                FeedItemRow(item: item, showPreview: preferences.showPreviews, now: now)
+                            }
+                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                SaveSwipeButton(item: item)
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                ReadSwipeButton(item: item)
                             }
                         }
                     }
                 }
             }
-            .navigationTitle("Grindstone")
-            .navigationDestination(for: FeedItem.self) { item in
-                DetailView(item: item)
+            .listStyle(.plain)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                FilterBar(selection: $vm.filter, sources: vm.visibleSources)
+                    .padding(.vertical, 8)
+                    .background(.bar)
             }
+            .navigationTitle("Grindstone")
+            .navigationSubtitle(subtitle)
             .toolbar {
-                ToolbarItemGroup(placement: .automatic) {
-                    if vm.filter == .rss || !rssStore.feeds.isEmpty {
-                        Button {
-                            isShowingRSSLibrary = true
-                        } label: {
-                            Image(systemName: "dot.radiowaves.left.and.right")
-                        }
-                    }
-
-                    Button {
-                        isShowingSavedArticles = true
-                    } label: {
-                        Image(systemName: feedUserState.savedItems.isEmpty ? "bookmark" : "bookmark.fill")
-                    }
-
-                    Button {
-                        showPreviews.toggle()
-                    } label: {
-                        Image(systemName: showPreviews ? "text.below.photo" : "list.bullet")
-                    }
-                }
+                feedToolbar
             }
             .refreshable {
                 await vm.refresh()
             }
-            .searchable(text: $searchText, prompt: "Search title, outlet, or snippet")
             .overlay {
                 if vm.isLoading && vm.items.isEmpty {
-                    ProgressView("Loading…")
+                    ProgressView("Loading stories…")
                 }
             }
             .task {
                 await vm.refreshOnLaunch()
             }
+            .onReceive(clock) { date in
+                now = date
+            }
+            .confirmationDialog(
+                "Mark \(visibleItems.count) stories as read?",
+                isPresented: $isConfirmingMarkAllRead,
+                titleVisibility: .visible
+            ) {
+                Button("Mark as Read") {
+                    feedUserState.markRead(visibleItems)
+                }
+            }
             .sheet(isPresented: $isShowingRSSLibrary) {
-                RSSFeedManagerView()
+                RSSFeedManagerSheet()
                     .environmentObject(rssStore)
             }
-            .sheet(isPresented: $isShowingSavedArticles) {
-                SavedArticlesView()
-                    .environmentObject(feedUserState)
+            .navigationDestination(for: ArticleDestination.self) { destination in
+                DetailView(destination: destination)
             }
         }
     }
 
-    private var trimmedSearchText: String {
-        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
+    // MARK: Toolbar
 
-    private var filteredItems: [FeedItem] {
-        let query = trimmedSearchText
-        guard !query.isEmpty else { return vm.filtered }
-
-        return vm.filtered.filter { item in
-            item.matchesSearch(query)
-        }
-    }
-}
-
-private struct FeedRefreshStatusRow: View {
-    let lastUpdatedAt: Date?
-    let isRefreshing: Bool
-
-    var body: some View {
-        HStack(spacing: 8) {
-            if isRefreshing {
-                ProgressView()
-                    .controlSize(.small)
+    @ToolbarContentBuilder
+    private var feedToolbar: some ToolbarContent {
+#if os(macOS)
+        ToolbarItem(placement: .automatic) {
+            Button("Refresh", systemImage: "arrow.clockwise") {
+                Task { await vm.refresh() }
             }
+            .keyboardShortcut("r", modifiers: .command)
+            .disabled(vm.isLoading)
+        }
+#endif
 
-            if let lastUpdatedAt {
-                TimelineView(.periodic(from: .now, by: 60)) { _ in
-                    Text("Updated \(lastUpdatedAt.relativeFormatted)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        ToolbarItem(placement: .primaryAction) {
+            Menu {
+                Toggle("Hide Read Stories", systemImage: "eye.slash", isOn: $preferences.hideReadItems)
+                Toggle("Show Previews", systemImage: "text.alignleft", isOn: $preferences.showPreviews)
+
+                Divider()
+
+                Button("Mark All as Read", systemImage: "checkmark.circle") {
+                    isConfirmingMarkAllRead = true
                 }
-            } else if isRefreshing {
-                Text("Refreshing…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+                .disabled(feedUserState.unreadCount(in: visibleItems) == 0)
 
-            Spacer(minLength: 0)
-        }
-    }
-}
-
-private struct FeedSearchEmptyStateCard: View {
-    let query: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("No Matches", systemImage: "magnifyingglass")
-                .font(.headline)
-
-            Text("Nothing in the current feed matches \"\(query)\". Try a broader term or switch filters.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-        )
-    }
-}
-
-private struct FeedEmptyStateCard: View {
-    let filter: Source?
-    let hasRSSFeeds: Bool
-    let onManageRSS: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label(title, systemImage: iconName)
-                .font(.headline)
-
-            Text(message)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            if filter == .rss {
-                Button(hasRSSFeeds ? "Manage RSS Feeds" : "Add Your First Feed", action: onManageRSS)
-                    .buttonStyle(.borderedProminent)
-                    .tint(.indigo)
+                Button("Manage RSS Feeds", systemImage: "dot.radiowaves.left.and.right") {
+                    isShowingRSSLibrary = true
+                }
+            } label: {
+                Label("Options", systemImage: "ellipsis.circle")
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-        )
     }
 
-    private var title: String {
-        switch filter {
-        case .rss:
-            return hasRSSFeeds ? "No RSS items yet" : "RSS library is empty"
-        case let source?:
-            return "No \(source.rawValue) items"
-        case nil:
-            return "No feed items yet"
+    // MARK: Derived state
+
+    private var visibleItems: [FeedItem] {
+        let base = vm.filtered
+        guard preferences.hideReadItems else { return base }
+        return base.filter { !feedUserState.isRead($0) }
+    }
+
+    private var isRSSLaneUnconfigured: Bool {
+        vm.filter == .rss && rssStore.enabledFeeds.isEmpty
+    }
+
+    private var subtitle: String {
+        if vm.isLoading, vm.lastUpdatedAt == nil {
+            return "Refreshing…"
         }
-    }
 
-    private var message: String {
-        switch filter {
-        case .rss:
-            return hasRSSFeeds
-                ? "Your enabled RSS feeds did not return any recent items right now. You can add more feeds or toggle existing ones back on."
-                : "Paste in blog or publication feed URLs here. Marginal Revolution now lives in this manual RSS lane by default."
-        case let source?:
-            return "There isn’t anything to show for \(source.rawValue) right now. Pull to refresh and try again."
-        case nil:
-            return "The aggregator hasn’t returned any stories yet. Pull to refresh and we’ll try again."
+        var parts: [String] = []
+
+        if !visibleItems.isEmpty {
+            let unread = feedUserState.unreadCount(in: visibleItems)
+            parts.append(unread == 0 ? "All caught up" : "\(unread) unread")
         }
+
+        if let lastUpdatedAt = vm.lastUpdatedAt {
+            parts.append("Updated \(lastUpdatedAt.relativeFormatted(relativeTo: now))")
+        }
+
+        return parts.joined(separator: " · ")
     }
 
-    private var iconName: String {
-        filter?.iconName ?? "tray"
+    @ViewBuilder
+    private var emptyState: some View {
+        if preferences.hideReadItems, !vm.filtered.isEmpty {
+            ContentUnavailableView {
+                Label("All Caught Up", systemImage: "checkmark.circle")
+            } description: {
+                Text("Every story here is marked read.")
+            } actions: {
+                Button("Show Read Stories") {
+                    preferences.hideReadItems = false
+                }
+            }
+        } else if let source = vm.filter {
+            ContentUnavailableView {
+                Label("Nothing from \(source.rawValue)", systemImage: source.iconName)
+            } description: {
+                Text("Pull to refresh, or check back in a little while.")
+            }
+        } else {
+            ContentUnavailableView {
+                Label("No Stories Yet", systemImage: "tray")
+            } description: {
+                Text("Pull to refresh to load the latest from your sources.")
+            } actions: {
+                Button("Refresh") {
+                    Task { await vm.refresh() }
+                }
+            }
+        }
     }
 }
 
 #Preview {
-    let rssStore = ManualRSSFeedStore.shared
-
     FeedView()
-        .environmentObject({
-            let vm = FeedViewModel(rssStore: rssStore)
-            vm.items = FeedItem.mock
-            vm.lastUpdatedAt = Date().addingTimeInterval(-180)
-            return vm
-        }())
-        .environmentObject(rssStore)
-        .environmentObject({
-            let defaults = UserDefaults(suiteName: "FeedViewPreview")!
-            let store = FeedUserStateStore(defaults: defaults)
-            store.save(FeedItem.mock[0])
-            store.markRead(FeedItem.mock[1])
-            return store
-        }())
+        .previewEnvironment()
 }

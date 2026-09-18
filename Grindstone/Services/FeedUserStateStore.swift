@@ -24,16 +24,31 @@ final class FeedUserStateStore: ObservableObject {
         }
     }
 
+    // MARK: Read state
+
     func isRead(_ item: FeedItem) -> Bool {
         readItemIDs.contains(item.id)
     }
 
-    func isSaved(_ item: FeedItem) -> Bool {
-        savedItems.contains { $0.id == item.id }
+    func unreadCount(in items: [FeedItem]) -> Int {
+        items.reduce(into: 0) { count, item in
+            if !readItemIDs.contains(item.id) {
+                count += 1
+            }
+        }
     }
 
     func markRead(_ item: FeedItem) {
         guard readItemIDs.insert(item.id).inserted else { return }
+        persistReadState()
+    }
+
+    func markRead(_ items: [FeedItem]) {
+        let before = readItemIDs.count
+        for item in items {
+            readItemIDs.insert(item.id)
+        }
+        guard readItemIDs.count != before else { return }
         persistReadState()
     }
 
@@ -48,6 +63,18 @@ final class FeedUserStateStore: ObservableObject {
         } else {
             markRead(item)
         }
+    }
+
+    func clearReadHistory() {
+        guard !readItemIDs.isEmpty else { return }
+        readItemIDs.removeAll()
+        persistReadState()
+    }
+
+    // MARK: Saved stories
+
+    func isSaved(_ item: FeedItem) -> Bool {
+        savedItems.contains { $0.id == item.id }
     }
 
     func save(_ item: FeedItem) {
@@ -72,6 +99,14 @@ final class FeedUserStateStore: ObservableObject {
             save(item)
         }
     }
+
+    func clearSavedItems() {
+        guard !savedItems.isEmpty else { return }
+        savedItems.removeAll()
+        persistSavedItems()
+    }
+
+    // MARK: Persistence
 
     private func persistReadState() {
         defaults.set(Array(readItemIDs).sorted(), forKey: readItemIDsKey)

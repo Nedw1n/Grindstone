@@ -3,7 +3,12 @@ import Foundation
 extension Date {
     /// Human-readable relative timestamp: "3m ago", "2h ago", "1d ago".
     var relativeFormatted: String {
-        let now = Date()
+        relativeFormatted(relativeTo: Date())
+    }
+
+    /// Same as `relativeFormatted`, anchored to a caller-supplied clock so views
+    /// can re-render on a timer without each label reading the clock itself.
+    func relativeFormatted(relativeTo now: Date) -> String {
         let interval = now.timeIntervalSince(self)
 
         guard interval > 0 else { return "now" }

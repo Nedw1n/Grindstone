@@ -89,7 +89,8 @@ enum ManualRSSService {
                     points: item.points,
                     snippet: item.snippet,
                     intraSourceRank: item.intraSourceRank,
-                    crossRefs: []
+                    crossRefs: [],
+                    discussionURL: item.discussionURL
                 )
             }
 
@@ -129,6 +130,7 @@ final class RSSParser: NSObject, XMLParserDelegate {
     private var currentLink = ""
     private var currentDate = ""
     private var currentSnippet = ""
+    private var currentComments = ""
     private var isInsideItem = false
 
     // Tag names that delimit an item vary between RSS and Atom
@@ -137,6 +139,7 @@ final class RSSParser: NSObject, XMLParserDelegate {
     private let linkTags: Set<String> = ["link"]
     private let dateTags: Set<String> = ["pubDate", "published", "updated", "dc:date"]
     private let snippetTags: Set<String> = ["description", "summary", "content"]
+    private let commentsTags: Set<String> = ["comments"]
 
     init(source: Source) {
         self.source = source
@@ -162,6 +165,7 @@ final class RSSParser: NSObject, XMLParserDelegate {
             currentLink = ""
             currentDate = ""
             currentSnippet = ""
+            currentComments = ""
         }
 
         // Atom uses <link href="..."/> as a self-closing tag
@@ -181,6 +185,8 @@ final class RSSParser: NSObject, XMLParserDelegate {
             currentDate += string
         } else if snippetTags.contains(currentElement) {
             currentSnippet += string
+        } else if commentsTags.contains(currentElement) {
+            currentComments += string
         }
     }
 
@@ -189,14 +195,21 @@ final class RSSParser: NSObject, XMLParserDelegate {
         guard itemTags.contains(element), isInsideItem else { return }
 
         isInsideItem = false
-        let title = currentTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = currentTitle
+            .strippingHTML()
+            .decodingHTMLEntities()
+            .condensedWhitespace()
         let link = currentLink.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !title.isEmpty, let url = URL(string: link) else { return }
 
         let date = Self.parseDate(currentDate.trimmingCharacters(in: .whitespacesAndNewlines))
-        let snippet = currentSnippet.trimmingCharacters(in: .whitespacesAndNewlines)
+        let snippet = currentSnippet
             .strippingHTML()
+            .decodingHTMLEntities()
+            .condensedWhitespace()
+        let commentsLink = currentComments.trimmingCharacters(in: .whitespacesAndNewlines)
+        let discussionURL = commentsLink.isEmpty ? nil : URL(string: commentsLink)
 
         items.append(FeedItem(
             id: url.absoluteString,
@@ -209,7 +222,8 @@ final class RSSParser: NSObject, XMLParserDelegate {
             points: nil,
             snippet: snippet.isEmpty ? nil : String(snippet.prefix(280)),
             intraSourceRank: 0,
-            crossRefs: []
+            crossRefs: [],
+            discussionURL: discussionURL
         ))
     }
 
