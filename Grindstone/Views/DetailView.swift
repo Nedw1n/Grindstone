@@ -12,7 +12,7 @@ struct DetailView: View {
 
     init(destination: ArticleDestination) {
         self.destination = destination
-        _kind = State(initialValue: destination.kind)
+        kind = destination.kind
     }
 
     private var item: FeedItem { destination.item }

@@ -12,7 +12,7 @@ struct RSSFeedManagerView: View {
     @State private var transferStatus: RSSLibraryTransferStatus?
     @State private var isShowingOPMLImporter = false
     @State private var isShowingOPMLExporter = false
-    @State private var exportDocument: RSSOPMLDocument?
+    @State private var pendingExport: RSSOPMLExport?
 
     var body: some View {
         Form {
@@ -30,12 +30,16 @@ struct RSSFeedManagerView: View {
         }
         .fileExporter(
             isPresented: $isShowingOPMLExporter,
-            document: exportDocument,
-            contentType: .opml,
-            defaultFilename: "grindstone-rss-library"
-        ) { result in
-            exportOPML(result)
-        }
+            item: pendingExport,
+            contentTypes: [.opml],
+            defaultFilename: "grindstone-rss-library",
+            onCompletion: { result in
+                exportOPML(result)
+            },
+            onCancellation: {
+                pendingExport = nil
+            }
+        )
     }
 
     // MARK: Sections
@@ -158,7 +162,7 @@ struct RSSFeedManagerView: View {
 
     private func prepareOPMLExport() {
         transferStatus = nil
-        exportDocument = RSSOPMLDocument(text: rssStore.exportOPMLString())
+        pendingExport = RSSOPMLExport(text: rssStore.exportOPMLString())
         isShowingOPMLExporter = true
     }
 
@@ -174,7 +178,7 @@ struct RSSFeedManagerView: View {
     }
 
     private func exportOPML(_ result: Result<URL, Error>) {
-        defer { exportDocument = nil }
+        defer { pendingExport = nil }
 
         do {
             let fileURL = try result.get()

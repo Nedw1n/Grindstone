@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
+import CoreTransferable
 
 enum RSSOPMLError: LocalizedError {
     case invalidDocument
@@ -69,27 +70,15 @@ enum RSSOPMLCodec {
     }
 }
 
-struct RSSOPMLDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.opml, .xml] }
+/// An OPML export handed to `fileExporter` (and usable with `ShareLink`).
+/// Uses `Transferable` rather than `FileDocument`, which the 27 SDKs deprecate.
+struct RSSOPMLExport: Transferable {
+    let text: String
 
-    var text: String
-
-    init(text: String) {
-        self.text = text
-    }
-
-    init(configuration: ReadConfiguration) throws {
-        guard
-            let data = configuration.file.regularFileContents,
-            let text = String(data: data, encoding: .utf8)
-        else {
-            throw RSSOPMLError.invalidDocument
+    static var transferRepresentation: some TransferRepresentation {
+        DataRepresentation(exportedContentType: .opml) { export in
+            Data(export.text.utf8)
         }
-        self.text = text
-    }
-
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        FileWrapper(regularFileWithContents: Data(text.utf8))
     }
 }
 
