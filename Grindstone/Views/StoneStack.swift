@@ -98,7 +98,10 @@ private struct StoneCard: View {
             StoneSurface(tone: tone)
         }
         .contentShape(shape)
+#if !os(macOS)
+        // Lifts the card with its pebble corners when the menu opens.
         .contentShape(.contextMenuPreview, shape)
+#endif
         .animation(.easeOut(duration: 0.2), value: isRead)
         .accessibilityElement(children: .combine)
         .accessibilityValue(isRead ? "" : "Unread")
