@@ -9,6 +9,7 @@ struct DetailView: View {
     @EnvironmentObject private var feedUserState: FeedUserStateStore
     let destination: ArticleDestination
     @State private var kind: ArticleDestination.Kind
+    @State private var openedAt: Date?
 
     init(destination: ArticleDestination) {
         self.destination = destination
@@ -41,6 +42,7 @@ struct DetailView: View {
                     }
 
                     Button {
+                        EngagementLog.shared.record(feedUserState.isSaved(item) ? .unsave : .save, item)
                         feedUserState.toggleSaved(item)
                     } label: {
                         Label(
@@ -57,7 +59,18 @@ struct DetailView: View {
                 }
             }
             .task {
+                EngagementLog.shared.record(destination.kind == .article ? .open : .openDiscussion, item)
+                openedAt = Date()
                 feedUserState.markRead(item)
+            }
+            .onDisappear {
+                guard let openedAt else { return }
+                self.openedAt = nil
+                EngagementLog.shared.record(
+                    .closeReader,
+                    item,
+                    readingSeconds: Int(Date().timeIntervalSince(openedAt))
+                )
             }
     }
 

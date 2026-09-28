@@ -8,6 +8,7 @@ struct ArticleLink<Label: View>: View {
     @EnvironmentObject private var preferences: FeedPreferences
     @EnvironmentObject private var feedUserState: FeedUserStateStore
     @Environment(\.openURL) private var openURL
+    @Environment(\.storyPlacement) private var placement
 
     private let destination: ArticleDestination
     private let label: () -> Label
@@ -46,6 +47,6 @@ struct ArticleLink<Label: View>: View {
             userState: feedUserState,
             openURL: openURL
         )
-        .open(destination)
+        .open(destination, placement: placement)
     }
 }

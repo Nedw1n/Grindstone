@@ -18,6 +18,10 @@ final class FeedViewModel: ObservableObject {
     @Published var lastUpdatedAt: Date?
     @Published var failures: [SourceFailure] = []
     @Published private var sourceItems: [Source: [FeedItem]] = [:]
+    /// Every source each fetched story appeared on, keyed by item ID.
+    @Published private var storySources: [String: Set<Source>] = [:]
+    /// The merged entry each fetched item was folded into, keyed by item ID.
+    private var leadIDs: [String: String] = [:]
 
     private let rssStore: ManualRSSFeedStore
     private let preferences: FeedPreferences
@@ -81,7 +85,11 @@ final class FeedViewModel: ObservableObject {
         }
 
         for source in Source.featuredSources where preferences.isEnabled(source) {
-            guard let top = sourceItems[source]?.first ?? items.first(where: { $0.source == source }),
+            // A source's top story may have been folded into another source's
+            // entry; use the merged entry so a story never takes two stones.
+            let topLeadID = sourceItems[source]?.first.map { leadIDs[$0.id] ?? $0.id }
+            guard let top = items.first(where: { $0.id == topLeadID })
+                    ?? items.first(where: { $0.source == source }),
                   seen.insert(top.id).inserted else { continue }
             picks.append(top)
         }
@@ -94,7 +102,16 @@ final class FeedViewModel: ObservableObject {
         guard let f = filter else { return items }
         guard preferences.isEnabled(f) else { return [] }
         if f == .rss, !rssStore.feeds.contains(where: \.isEnabled) { return [] }
-        return sourceItems[f] ?? items.filter { $0.source == f }
+        guard let laneItems = sourceItems[f] else {
+            return items.filter { $0.source == f }
+        }
+        // A source's own lane shows where else each story ran, too.
+        return laneItems.map { item in
+            var annotated = item
+            let sources = storySources[item.id] ?? []
+            annotated.crossRefs = Source.allCases.filter { $0 != item.source && sources.contains($0) }
+            return annotated
+        }
     }
 
     /// Everything fetched from every source, deduplicated. Search runs over this
@@ -151,7 +168,7 @@ final class FeedViewModel: ObservableObject {
             activeSources: Set(definitions.map(\.source))
         )
         sourceItems = effectiveSourceItems
-        items = mergedItems(from: effectiveSourceItems, definitions: definitions)
+        applyMerge(from: effectiveSourceItems, definitions: definitions)
 
         let successfulResults = nonCancelledResults.filter(\.wasSuccessful)
         if !successfulResults.isEmpty {
@@ -183,7 +200,7 @@ final class FeedViewModel: ObservableObject {
         }
 
         let definitions = sourceDefinitions(enabledSources: enabledSources)
-        items = mergedItems(from: sourceItems, definitions: definitions)
+        applyMerge(from: sourceItems, definitions: definitions)
     }
 
     private func effectiveItems(
@@ -210,25 +227,43 @@ final class FeedViewModel: ObservableObject {
         return updated
     }
 
-    private func mergedItems(
+    /// Builds the merged front page. Stories are matched across the whole of
+    /// each source's fetch, not just the slice that makes the front page, so a
+    /// story low on one source still counts as cross-posted.
+    private func applyMerge(
         from sourceItems: [Source: [FeedItem]],
         definitions: [FeedSourceDefinition]
-    ) -> [FeedItem] {
-        let mergeCandidates = definitions.flatMap { definition in
-            Array((sourceItems[definition.source] ?? []).prefix(definition.mergeLimit))
+    ) {
+        let allFetched = definitions.flatMap { sourceItems[$0.source] ?? [] }
+        guard !allFetched.isEmpty else {
+            items = []
+            storySources = [:]
+            leadIDs = [:]
+            return
         }
 
-        guard !mergeCandidates.isEmpty else { return [] }
+        let merged = CrossRefEngine.mergeStories(allFetched)
+        storySources = merged.storySources
+        leadIDs = merged.leadIDs
 
-        let deduped = CrossRefEngine.deduplicate(mergeCandidates)
-        let crossReffed = CrossRefEngine.compute(deduped)
-        return FeedRankingEngine.sortMergedItems(crossReffed)
+        // The front page keeps each source's top slice, as before: a story makes
+        // it when any of its copies is in its source's slice.
+        let frontPageLeadIDs = Set(definitions.flatMap { definition in
+            (sourceItems[definition.source] ?? []).prefix(definition.mergeLimit).compactMap { item in
+                merged.leadIDs[item.id]
+            }
+        })
+        let frontPage = merged.items.filter { lead in
+            frontPageLeadIDs.contains(lead.id)
+        }
+
+        items = FeedRankingEngine.sortMergedItems(frontPage)
     }
 
     private func restoreCachedItems() {
         guard let snapshot = FeedCacheStore.load() else { return }
         sourceItems = snapshot.sourceItems
-        items = mergedItems(
+        applyMerge(
             from: snapshot.sourceItems,
             definitions: sourceDefinitions(enabledSources: preferences.enabledSources)
         )

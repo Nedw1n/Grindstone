@@ -96,9 +96,40 @@ enum MemeorandumService {
             articleURL: articleURL,
             title: title,
             outlet: outlet,
-            snippet: snippet.isEmpty ? nil : String(snippet.prefix(280))
+            snippet: snippet.isEmpty ? nil : String(snippet.prefix(280)),
+            relatedURLs: relatedURLs(in: cluster, excluding: articleURL)
         )
     }
+
+    /// Every outside article a cluster links to. Memeorandum groups each story
+    /// with the other outlets covering it, which lets the same story be
+    /// recognized when Hacker News or an RSS feed links one of those outlets
+    /// instead. Social posts and Memeorandum's own pages are left out.
+    private static func relatedURLs(in cluster: String, excluding articleURL: URL) -> [URL] {
+        let articleKey = FeedItem.storyKey(for: articleURL)
+        var seenKeys: Set<String> = [articleKey]
+        var urls: [URL] = []
+
+        for href in allCaptures(in: cluster, pattern: #"(?i)<A\s+HREF="(https?://[^"]+)""#) {
+            guard
+                let url = URL(string: href.decodingHTMLEntities()),
+                let host = url.host?.lowercased(),
+                !excludedRelatedHosts.contains(where: { host == $0 || host.hasSuffix("." + $0) })
+            else { continue }
+
+            guard seenKeys.insert(FeedItem.storyKey(for: url)).inserted else { continue }
+            urls.append(url)
+            if urls.count == 40 { break }
+        }
+
+        return urls
+    }
+
+    private static let excludedRelatedHosts = [
+        "memeorandum.com", "techmeme.com", "mediagazer.com", "wesmirch.com",
+        "twitter.com", "x.com", "bsky.app", "threads.net", "threads.com",
+        "facebook.com", "instagram.com", "truthsocial.com", "mastodon.social",
+    ]
 
     private static func outletName(from cluster: String) -> String? {
         guard let citeBlock = firstCapture(in: cluster, pattern: #"<CITE>(.*?)</CITE>"#) else {
@@ -175,6 +206,7 @@ private struct MemoHomepageItem {
     let title: String
     let outlet: String?
     let snippet: String?
+    let relatedURLs: [URL]
 
     func makeFeedItem(metadata: FeedItem?) -> FeedItem {
         let resolvedSnippet = snippet
@@ -192,7 +224,8 @@ private struct MemoHomepageItem {
             snippet: resolvedSnippet,
             intraSourceRank: 0,
             crossRefs: [],
-            discussionURL: metadata?.url
+            discussionURL: metadata?.url,
+            relatedURLs: relatedURLs
         )
     }
 

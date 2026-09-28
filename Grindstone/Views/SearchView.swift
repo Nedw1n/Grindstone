@@ -29,10 +29,11 @@ struct SearchView: View {
                             .listRowSeparator(.hidden)
                             .paperListRow()
 
-                        ForEach(results) { item in
+                        ForEach(Array(results.enumerated()), id: \.element.id) { index, item in
                             ArticleLink(destination: .article(item)) {
                                 FeedItemRow(item: item, showPreview: preferences.showPreviews)
                             }
+                            .environment(\.storyPlacement, StoryPlacement(surface: .search, position: index))
                             .listRowInsets(EdgeInsets.storyRow)
                             .paperListRow()
                             .swipeActions(edge: .leading, allowsFullSwipe: true) {

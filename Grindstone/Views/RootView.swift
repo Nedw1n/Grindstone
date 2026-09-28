@@ -9,6 +9,9 @@ enum AppTab: Hashable {
 
 /// Top-level layout: a tab bar on iPhone, a sidebar on iPad and Mac.
 struct RootView: View {
+    @EnvironmentObject private var session: ReadingSessionStore
+    @EnvironmentObject private var engagement: EngagementLog
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab: AppTab = .feed
 
     var body: some View {
@@ -34,6 +37,19 @@ struct RootView: View {
         }
         .tabViewStyle(.sidebarAdaptable)
         .modifier(InAppReaderPresentation())
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .active:
+                if session.beginVisit() {
+                    engagement.beginVisit()
+                }
+            case .inactive, .background:
+                session.endVisit()
+                engagement.flush()
+            @unknown default:
+                break
+            }
+        }
     }
 }
 
@@ -47,7 +63,7 @@ private struct InAppReaderPresentation: ViewModifier {
 #if os(iOS)
         content
             .tabBarMinimizeBehavior(.onScrollDown)
-            .fullScreenCover(item: $router.presentedDestination) { destination in
+            .fullScreenCover(item: $router.presentedDestination, onDismiss: { router.readerDidClose() }) { destination in
                 SafariView(
                     url: destination.url,
                     entersReaderIfAvailable: preferences.prefersReaderMode && destination.kind == .article

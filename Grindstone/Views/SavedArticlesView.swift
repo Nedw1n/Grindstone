@@ -16,14 +16,20 @@ struct SavedArticlesView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List {
-                        ForEach(feedUserState.savedItems) { item in
+                        ForEach(Array(feedUserState.savedItems.enumerated()), id: \.element.id) { index, item in
                             ArticleLink(destination: .article(item)) {
                                 FeedItemRow(item: item, showPreview: preferences.showPreviews)
                             }
+                            .environment(\.storyPlacement, StoryPlacement(surface: .saved, position: index))
                             .listRowInsets(EdgeInsets.storyRow)
                             .paperListRow()
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button(role: .destructive) {
+                                    EngagementLog.shared.record(
+                                        .unsave,
+                                        item,
+                                        placement: StoryPlacement(surface: .saved, position: index)
+                                    )
                                     feedUserState.unsave(item)
                                 } label: {
                                     Label("Remove", systemImage: "bookmark.slash")
@@ -46,6 +52,7 @@ struct SavedArticlesView: View {
                     ToolbarItem(placement: .primaryAction) {
                         Menu {
                             Button("Mark All as Read", systemImage: "checkmark.circle") {
+                                EngagementLog.shared.recordMarkAllRead(feedUserState.savedItems, userState: feedUserState)
                                 feedUserState.markRead(feedUserState.savedItems)
                             }
                             .disabled(feedUserState.unreadCount(in: feedUserState.savedItems) == 0)

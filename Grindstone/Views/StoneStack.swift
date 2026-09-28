@@ -14,13 +14,14 @@ struct StoneStack: View {
                 ArticleLink(destination: .article(stone.item)) {
                     StoneCard(item: stone.item, tone: stone.tone, showPreview: showPreview, now: now)
                 }
+                .environment(\.storyPlacement, StoryPlacement(surface: .stack, position: stone.position))
             }
         }
     }
 
     private var stones: [PlacedStone] {
-        zip(items, StoneTone.stack(count: items.count)).map { item, tone in
-            PlacedStone(item: item, tone: tone)
+        zip(items, StoneTone.stack(count: items.count)).enumerated().map { position, pair in
+            PlacedStone(item: pair.0, tone: pair.1, position: position)
         }
     }
 }
@@ -28,6 +29,7 @@ struct StoneStack: View {
 private struct PlacedStone: Identifiable {
     let item: FeedItem
     let tone: StoneTone
+    let position: Int
 
     var id: String { item.id }
 }
@@ -35,6 +37,7 @@ private struct PlacedStone: Identifiable {
 private struct StoneCard: View {
     @EnvironmentObject private var feedUserState: FeedUserStateStore
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.storyPlacement) private var placement
 
     /// The capstone's minimum height; the stones below scale up from it.
     @ScaledMetric(relativeTo: .title3) private var capstoneHeight: CGFloat = 124
@@ -106,6 +109,9 @@ private struct StoneCard: View {
         .accessibilityElement(children: .combine)
         .accessibilityValue(isRead ? "" : "Unread")
         .modifier(FeedItemContextMenu(item: item))
+        .onAppear {
+            EngagementLog.shared.recordImpression(item, placement: placement)
+        }
     }
 }
 

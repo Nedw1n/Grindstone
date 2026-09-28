@@ -11,6 +11,7 @@ struct FeedItemContextMenu: ViewModifier {
     @EnvironmentObject private var preferences: FeedPreferences
     @EnvironmentObject private var feedUserState: FeedUserStateStore
     @Environment(\.openURL) private var openURL
+    @Environment(\.storyPlacement) private var placement
 
     let item: FeedItem
 
@@ -22,22 +23,22 @@ struct FeedItemContextMenu: ViewModifier {
         content.contextMenu {
 #if os(iOS)
             Button("Open", systemImage: "safari") {
-                opener.open(.article(item))
+                opener.open(.article(item), placement: placement)
             }
 
             if let discussion = ArticleDestination.discussion(item) {
                 Button("Open Comments", systemImage: "bubble.left.and.bubble.right") {
-                    opener.open(discussion)
+                    opener.open(discussion, placement: placement)
                 }
             }
 #else
-            Link(destination: item.url) {
-                Label("Open in Browser", systemImage: "safari")
+            Button("Open in Browser", systemImage: "safari") {
+                openInBrowser(.article(item))
             }
 
-            if let discussionURL = item.discussionURL {
-                Link(destination: discussionURL) {
-                    Label("Open Comments in Browser", systemImage: "bubble.left.and.bubble.right")
+            if let discussion = ArticleDestination.discussion(item) {
+                Button("Open Comments in Browser", systemImage: "bubble.left.and.bubble.right") {
+                    openInBrowser(discussion)
                 }
             }
 #endif
@@ -48,6 +49,7 @@ struct FeedItemContextMenu: ViewModifier {
                 isSaved ? "Remove from Saved" : "Save for Later",
                 systemImage: isSaved ? "bookmark.slash" : "bookmark"
             ) {
+                EngagementLog.shared.record(isSaved ? .unsave : .save, item, placement: placement)
                 feedUserState.toggleSaved(item)
             }
 
@@ -55,18 +57,33 @@ struct FeedItemContextMenu: ViewModifier {
                 isRead ? "Mark as Unread" : "Mark as Read",
                 systemImage: isRead ? "circle" : "checkmark.circle"
             ) {
+                EngagementLog.shared.record(isRead ? .markUnread : .markRead, item, placement: placement)
                 feedUserState.toggleReadState(for: item)
             }
 
             Divider()
 
             Button("Copy Link", systemImage: "link") {
+                EngagementLog.shared.record(.copyLink, item, placement: placement)
                 Pasteboard.copy(item.url)
             }
 
             ShareLink(item: item.url)
         }
     }
+
+#if !os(iOS)
+    /// Opens in the default browser, logged like any other open.
+    private func openInBrowser(_ destination: ArticleDestination) {
+        EngagementLog.shared.record(
+            destination.kind == .article ? .open : .openDiscussion,
+            destination.item,
+            placement: placement
+        )
+        feedUserState.markRead(destination.item)
+        openURL(destination.url)
+    }
+#endif
 
     private var opener: ArticleOpener {
         ArticleOpener(
@@ -81,12 +98,14 @@ struct FeedItemContextMenu: ViewModifier {
 /// Leading swipe: save or unsave.
 struct SaveSwipeButton: View {
     @EnvironmentObject private var feedUserState: FeedUserStateStore
+    @Environment(\.storyPlacement) private var placement
     let item: FeedItem
 
     var body: some View {
         let isSaved = feedUserState.isSaved(item)
 
         Button {
+            EngagementLog.shared.record(isSaved ? .unsave : .save, item, placement: placement)
             feedUserState.toggleSaved(item)
         } label: {
             Label(
@@ -101,12 +120,14 @@ struct SaveSwipeButton: View {
 /// Trailing swipe: toggle read state.
 struct ReadSwipeButton: View {
     @EnvironmentObject private var feedUserState: FeedUserStateStore
+    @Environment(\.storyPlacement) private var placement
     let item: FeedItem
 
     var body: some View {
         let isRead = feedUserState.isRead(item)
 
         Button {
+            EngagementLog.shared.record(isRead ? .markUnread : .markRead, item, placement: placement)
             feedUserState.toggleReadState(for: item)
         } label: {
             Label(

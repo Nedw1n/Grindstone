@@ -15,6 +15,8 @@ enum PreviewWorld {
     static let rssStore = ManualRSSFeedStore(defaults: defaults)
     static let preferences = FeedPreferences(defaults: defaults)
     static let router = ArticleRouter()
+    static let session = ReadingSessionStore(defaults: defaults)
+    static let engagement = EngagementLog(fileURL: nil)
 
     static let userState: FeedUserStateStore = {
         let store = FeedUserStateStore(defaults: defaults)
@@ -38,5 +40,7 @@ extension View {
             .environmentObject(PreviewWorld.userState)
             .environmentObject(PreviewWorld.preferences)
             .environmentObject(PreviewWorld.router)
+            .environmentObject(PreviewWorld.session)
+            .environmentObject(PreviewWorld.engagement)
     }
 }

@@ -6,6 +6,7 @@ struct FeedView: View {
     @EnvironmentObject private var feedUserState: FeedUserStateStore
     @EnvironmentObject private var rssStore: ManualRSSFeedStore
     @EnvironmentObject private var preferences: FeedPreferences
+    @EnvironmentObject private var session: ReadingSessionStore
 
     @State private var isShowingRSSLibrary = false
     @State private var isConfirmingMarkAllRead = false
@@ -54,12 +55,16 @@ struct FeedView: View {
             .onReceive(clock) { date in
                 now = date
             }
+            .onChange(of: vm.searchCorpus.map(\.id), initial: true) { _, _ in
+                session.recordArrivals(vm.searchCorpus)
+            }
             .confirmationDialog(
                 markAllReadTitle,
                 isPresented: $isConfirmingMarkAllRead,
                 titleVisibility: .visible
             ) {
                 Button("Mark as Read") {
+                    EngagementLog.shared.recordMarkAllRead(onScreenItems, userState: feedUserState)
                     feedUserState.markRead(onScreenItems)
                 }
             }
@@ -131,23 +136,31 @@ struct FeedView: View {
             }
 
             if !streamItems.isEmpty {
-                SectionEyebrow(streamTitle, detail: "\(streamItems.count)")
-                    .listRowInsets(FeedInsets.eyebrow)
-                    .listRowSeparator(.hidden)
-                    .paperListRow()
+                let sections = streamSections
 
-                ForEach(streamItems) { item in
-                    ArticleLink(destination: .article(item)) {
-                        FeedItemRow(item: item, showPreview: preferences.showPreviews, now: now)
-                    }
-                    .listRowInsets(FeedInsets.story)
-                    .paperListRow()
-                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                        SaveSwipeButton(item: item)
-                    }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        ReadSwipeButton(item: item)
-                    }
+                if let newSince = session.newSince, !sections.new.isEmpty, !sections.earlier.isEmpty {
+                    // What arrived since your last visit comes first, so the
+                    // "Earlier" line marks where you left off.
+                    SectionEyebrow(newSinceTitle(newSince), detail: "\(sections.new.count)")
+                        .listRowInsets(FeedInsets.eyebrow)
+                        .listRowSeparator(.hidden)
+                        .paperListRow()
+
+                    storyRows(sections.new, positionOffset: 0)
+
+                    SectionEyebrow("Earlier", detail: "\(sections.earlier.count)")
+                        .listRowInsets(FeedInsets.eyebrow)
+                        .listRowSeparator(.hidden)
+                        .paperListRow()
+
+                    storyRows(sections.earlier, positionOffset: sections.new.count)
+                } else {
+                    SectionEyebrow(streamTitle, detail: "\(streamItems.count)")
+                        .listRowInsets(FeedInsets.eyebrow)
+                        .listRowSeparator(.hidden)
+                        .paperListRow()
+
+                    storyRows(streamItems, positionOffset: 0)
                 }
             }
 
@@ -171,6 +184,24 @@ struct FeedView: View {
         }
         .refreshable {
             await vm.refresh()
+        }
+    }
+
+    /// Story rows, each tagged with its position on the feed for the engagement log.
+    private func storyRows(_ items: [FeedItem], positionOffset: Int) -> some View {
+        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+            ArticleLink(destination: .article(item)) {
+                FeedItemRow(item: item, showPreview: preferences.showPreviews, now: now)
+            }
+            .environment(\.storyPlacement, StoryPlacement(surface: .feed, position: positionOffset + index))
+            .listRowInsets(FeedInsets.story)
+            .paperListRow()
+            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                SaveSwipeButton(item: item)
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                ReadSwipeButton(item: item)
+            }
         }
     }
 
@@ -267,6 +298,32 @@ struct FeedView: View {
     /// Every story on screen, stack and stream together, without repeats.
     private var onScreenItems: [FeedItem] {
         stackItems + streamItems
+    }
+
+    /// The stream split by arrival: stories new since the last visit, then the rest.
+    private var streamSections: (new: [FeedItem], earlier: [FeedItem]) {
+        var new: [FeedItem] = []
+        var earlier: [FeedItem] = []
+        for item in streamItems {
+            if session.isNew(item) {
+                new.append(item)
+            } else {
+                earlier.append(item)
+            }
+        }
+        return (new, earlier)
+    }
+
+    /// "New since 9:40 AM", "New since yesterday", or "New since Monday".
+    private func newSinceTitle(_ date: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) {
+            return "New since \(date.formatted(date: .omitted, time: .shortened))"
+        }
+        if calendar.isDateInYesterday(date) {
+            return "New since yesterday"
+        }
+        return "New since \(date.formatted(.dateTime.weekday(.wide)))"
     }
 
     private var streamTitle: String {

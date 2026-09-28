@@ -50,14 +50,42 @@ on warm paper.
 Colors live in `Assets.xcassets/Palette` with light and dark variants. Tokens
 and shared components are in `Design/`.
 
+## Ranking
+
+The merged front page scores each story from three signals:
+
+- **Placement (50%)** – where the story sits on its source's front page.
+  Only Hacker News and Memeorandum rank editorially; the biotech journals and
+  RSS feeds list the newest first, so their stories get a neutral middle score
+  rather than a position that would count recency twice.
+- **Cross-posting (35%)** – how many other sources carry the same story.
+  Stories are matched across each source's whole fetch by normalized link
+  (scheme, `www.`/mobile/AMP variants, fragments, and tracking parameters are
+  ignored), by the other outlets Memeorandum lists for a story, and by
+  headlines that share most of their words. Each story appears once, with its
+  best placement and every other source as a cross-reference.
+- **Recency (15%)** – halves every six hours, on an absolute scale.
+
+Stories that arrived since your last visit (a gap of five minutes or more)
+sit above an **Earlier** line, so you can see where you left off.
+
+## Reading signals
+
+To try personalized ranking later, Grindstone keeps a private log on the
+device of what comes on screen, what you open and for how long, and what you
+save, skip, or mark read, with each story's source, site, position, and score
+at the time. It lives in Application Support as `engagement.jsonl`
+(`EngagementLog`), trims itself past 8 MB, and can be cleared in Settings. It
+does not affect ranking yet.
+
 ## How it fits together
 
 | Layer | Files |
 | --- | --- |
 | Models | `FeedItem`, `Source`, `ArticleDestination` |
 | Fetching | one service per source under `Services/`, coordinated by `FeedSourceCatalog` |
-| Ranking | `CrossRefEngine` finds the same URL across sources; `FeedRankingEngine` blends source rank, cross-references, and recency |
-| State | `FeedViewModel` (feed), `FeedUserStateStore` (read/saved), `FeedPreferences` (settings), `ManualRSSFeedStore` (RSS library) |
+| Ranking | `CrossRefEngine` groups the same story across sources; `FeedRankingEngine` blends placement, cross-references, and recency |
+| State | `FeedViewModel` (feed), `FeedUserStateStore` (read/saved), `FeedPreferences` (settings), `ManualRSSFeedStore` (RSS library), `ReadingSessionStore` (visits and story arrivals), `EngagementLog` (reading signals) |
 | Design | `Theme` (palette, type, row styles, pebble button), `Stone` (stone tones, grained surface, cairn mark and glyph), `Components` (section labels, empty states) |
 | UI | `RootView` tab layout, `FeedView`, `FilterBar`, `StoneStack`, `FeedItemRow`, `StoryParts`, `SettingsView`, `RSSFeedManagerView`, `SearchView`, `SavedArticlesView` |
 

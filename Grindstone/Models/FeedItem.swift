@@ -15,28 +15,64 @@ struct FeedItem: Identifiable, Hashable, Codable, Sendable {
     /// Where the conversation about this story lives (Hacker News thread,
     /// Memeorandum cluster, blog comments). `nil` when the source has none.
     var discussionURL: URL? = nil
+    /// Other articles the source groups with this one as the same story
+    /// (Memeorandum lists every outlet covering a story). Used only to spot
+    /// the story on other sources.
+    var relatedURLs: [URL] = []
 
-    /// URL normalized for cross-reference matching.
-    /// Strips tracking parameters, trailing slashes, and lowercases the host.
+    /// The link reduced to what identifies the article, for matching the same
+    /// story across sources. See `FeedItem.storyKey(for:)`.
     var normalizedURL: String {
-        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            return url.absoluteString
+        FeedItem.storyKey(for: url)
+    }
+
+    /// Reduces a link to what identifies the article: no scheme, no `www.`,
+    /// mobile, or AMP variants, no fragment, no trailing slash or index page,
+    /// and no tracking parameters. The remaining query is sorted, so parameter
+    /// order doesn't matter.
+    static func storyKey(for url: URL) -> String {
+        guard
+            let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+            var host = components.host?.lowercased()
+        else {
+            return url.absoluteString.lowercased()
         }
-        components.scheme = components.scheme?.lowercased()
-        components.host = components.host?.lowercased()
-        components.queryItems = components.queryItems?
-            .filter { item in
-                let name = item.name.lowercased()
-                return !name.hasPrefix("utm_") && name != "ref" && name != "source"
-            }
-        if components.queryItems?.isEmpty == true {
-            components.queryItems = nil
+
+        for prefix in ["www.", "m.", "mobile.", "amp."] where host.hasPrefix(prefix) {
+            host.removeFirst(prefix.count)
+            break
         }
-        var result = components.string ?? url.absoluteString
-        while result.hasSuffix("/") {
-            result.removeLast()
+
+        var path = components.path
+        if path.lowercased().hasPrefix("/amp/") {
+            path.removeFirst(4)
         }
-        return result
+        for suffix in ["/amp", ".amp", "/index.html", "/index.htm", "/index.php"]
+        where path.lowercased().hasSuffix(suffix) {
+            path.removeLast(suffix.count)
+            break
+        }
+        while path.hasSuffix("/") {
+            path.removeLast()
+        }
+
+        let query = (components.queryItems ?? [])
+            .filter { !isTrackingParameter($0.name) }
+            .sorted { $0.name < $1.name }
+            .map { "\($0.name)=\($0.value ?? "")" }
+
+        return query.isEmpty ? host + path : host + path + "?" + query.joined(separator: "&")
+    }
+
+    private static let trackingParameters: Set<String> = [
+        "ref", "source", "fbclid", "gclid", "dclid", "msclkid", "mc_cid", "mc_eid",
+        "ocid", "cmpid", "smid", "smtyp", "sref", "igshid", "_ga", "_gl", "spm",
+        "share", "via", "rss", "outputtype", "at_medium", "at_campaign", "ito", "s_cid",
+    ]
+
+    private static func isTrackingParameter(_ name: String) -> Bool {
+        let name = name.lowercased()
+        return name.hasPrefix("utm_") || trackingParameters.contains(name)
     }
 
     /// The outlet name when the source supplied one, otherwise the article's host
@@ -153,6 +189,7 @@ extension FeedItem {
         case intraSourceRank
         case crossRefs
         case discussionURL
+        case relatedURLs
     }
 
     init(from decoder: Decoder) throws {
@@ -169,7 +206,8 @@ extension FeedItem {
             snippet: try container.decodeIfPresent(String.self, forKey: .snippet),
             intraSourceRank: try container.decodeIfPresent(Double.self, forKey: .intraSourceRank) ?? 0,
             crossRefs: try container.decodeIfPresent([Source].self, forKey: .crossRefs) ?? [],
-            discussionURL: try container.decodeIfPresent(URL.self, forKey: .discussionURL)
+            discussionURL: try container.decodeIfPresent(URL.self, forKey: .discussionURL),
+            relatedURLs: try container.decodeIfPresent([URL].self, forKey: .relatedURLs) ?? []
         )
     }
 }

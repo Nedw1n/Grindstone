@@ -1,5 +1,11 @@
 import SwiftUI
 
+extension EnvironmentValues {
+    /// Where the story being shown sits (surface and position), so opens,
+    /// saves, and skips can be logged with their context.
+    @Entry var storyPlacement: StoryPlacement? = nil
+}
+
 /// A source's mineral tint as a small pebble.
 struct SourceDot: View {
     let source: Source

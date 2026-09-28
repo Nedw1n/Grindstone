@@ -2,6 +2,7 @@ import SwiftUI
 
 struct FeedItemRow: View {
     @EnvironmentObject private var feedUserState: FeedUserStateStore
+    @Environment(\.storyPlacement) private var placement
     let item: FeedItem
     var showPreview: Bool = true
     var now: Date = Date()
@@ -42,6 +43,10 @@ struct FeedItemRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityValue(isRead ? "" : "Unread")
         .modifier(FeedItemContextMenu(item: item))
+        .onAppear {
+            guard let placement else { return }
+            EngagementLog.shared.recordImpression(item, placement: placement)
+        }
     }
 }
 

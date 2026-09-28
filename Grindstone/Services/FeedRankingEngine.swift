@@ -12,7 +12,14 @@ enum FeedRankingEngine {
     private static let sourceRankWeight = 0.5
     private static let crossReferenceWeight = 0.35
     private static let recencyWeight = 0.15
-    private static let recencyDecayAlpha = 0.4
+
+    /// Hours for a story's freshness to halve.
+    private static let recencyHalfLifeHours = 6.0
+
+    /// The placement given to stories from date-ordered sources: about halfway
+    /// down a front page. Their position only says how new they are, and
+    /// recency already scores that.
+    private static let chronologicalPlacement = 0.5
 
     static func assignIntraSourceRanks(to orderedItems: [FeedItem]) -> [FeedItem] {
         guard !orderedItems.isEmpty else { return [] }
@@ -45,19 +52,10 @@ enum FeedRankingEngine {
         guard !items.isEmpty else { return [] }
 
         let now = Date()
-        let recencySignals = items.map { rawRecencySignal(for: $0, now: now) }
-        let normalizedRecency = normalize(recencySignals)
-        let crossRefDenominator = Double(max(Source.allCases.count - 1, 1))
-
         let rankedItems = items.enumerated().map { index, item in
-            let crossReferenceSignal = Double(Set(item.crossRefs).count) / crossRefDenominator
-            let score = (sourceRankWeight * item.intraSourceRank)
-                + (crossReferenceWeight * crossReferenceSignal)
-                + (recencyWeight * normalizedRecency[index])
-
-            return RankedMergedFeedItem(
+            RankedMergedFeedItem(
                 originalIndex: index,
-                score: score,
+                score: score(for: item, now: now),
                 item: item
             )
         }
@@ -67,25 +65,28 @@ enum FeedRankingEngine {
             .map(\.item)
     }
 
-    private static func rawRecencySignal(for item: FeedItem, now: Date) -> Double {
-        let ageHours = max(0, now.timeIntervalSince(item.publishedAt) / 3600)
-        return 1 / pow(ageHours + 2, recencyDecayAlpha)
+    /// A story's score on the merged front page, from 0 to 1.
+    static func score(for item: FeedItem, now: Date = Date()) -> Double {
+        let crossRefDenominator = Double(max(Source.allCases.count - 1, 1))
+        let crossReferenceSignal = Double(Set(item.crossRefs).count) / crossRefDenominator
+
+        return (sourceRankWeight * placementSignal(for: item))
+            + (crossReferenceWeight * crossReferenceSignal)
+            + (recencyWeight * recencySignal(for: item, now: now))
     }
 
-    private static func normalize(_ values: [Double]) -> [Double] {
-        guard
-            let minimum = values.min(),
-            let maximum = values.max()
-        else {
-            return []
-        }
+    /// Front-page placement for editorially ranked sources; a neutral middle
+    /// for sources that only list the newest first.
+    static func placementSignal(for item: FeedItem) -> Double {
+        item.source.hasEditorialOrder ? item.intraSourceRank : chronologicalPlacement
+    }
 
-        let range = maximum - minimum
-        guard range > .ulpOfOne else {
-            return Array(repeating: 1, count: values.count)
-        }
-
-        return values.map { ($0 - minimum) / range }
+    /// Freshness on an absolute scale: 1 when published, halving every
+    /// `recencyHalfLifeHours`. Unlike a scale relative to the batch, a stale
+    /// cache never makes its least-old story look fresh.
+    static func recencySignal(for item: FeedItem, now: Date) -> Double {
+        let ageHours = max(0, now.timeIntervalSince(item.publishedAt) / 3600)
+        return pow(0.5, ageHours / recencyHalfLifeHours)
     }
 
     nonisolated private static func areInDescendingOrder(

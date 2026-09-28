@@ -7,6 +7,8 @@ struct GrindstoneApp: App {
     @StateObject private var feedViewModel: FeedViewModel
     @StateObject private var feedUserState: FeedUserStateStore
     @StateObject private var router = ArticleRouter()
+    @StateObject private var session = ReadingSessionStore.shared
+    @StateObject private var engagement = EngagementLog.shared
 
     init() {
         let rssStore = ManualRSSFeedStore.shared
@@ -27,6 +29,8 @@ struct GrindstoneApp: App {
                 .environmentObject(feedUserState)
                 .environmentObject(preferences)
                 .environmentObject(router)
+                .environmentObject(session)
+                .environmentObject(engagement)
         }
 #if os(macOS)
         .defaultSize(width: 1080, height: 780)
@@ -45,6 +49,8 @@ struct GrindstoneApp: App {
                 .environmentObject(feedUserState)
                 .environmentObject(preferences)
                 .environmentObject(router)
+                .environmentObject(session)
+                .environmentObject(engagement)
                 .frame(minWidth: 480, idealWidth: 540, minHeight: 560, idealHeight: 680)
         }
 #endif

@@ -36,6 +36,17 @@ enum Source: String, CaseIterable, Identifiable, Hashable, Codable, Sendable {
         }
     }
 
+    /// Whether the order a source publishes in reflects editorial judgement.
+    /// Hacker News and Memeorandum rank their front pages; the biotech journals
+    /// and RSS feeds simply list the newest first, so their position says
+    /// nothing beyond how recent a story is.
+    var hasEditorialOrder: Bool {
+        switch self {
+        case .hn, .memo: return true
+        case .biotech, .rss: return false
+        }
+    }
+
     /// A muted mineral tint (rust, slate, verdigris, heather) that sits with the
     /// stone palette. Sources are told apart by name first; color only backs it up.
     var color: Color {

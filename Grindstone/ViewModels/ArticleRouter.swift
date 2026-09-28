@@ -7,8 +7,24 @@ import Combine
 final class ArticleRouter: ObservableObject {
     @Published var presentedDestination: ArticleDestination?
 
-    func present(_ destination: ArticleDestination) {
+    /// The open reader, for timing how long a story was read.
+    private var reading: (destination: ArticleDestination, placement: StoryPlacement?, since: Date)?
+
+    func present(_ destination: ArticleDestination, placement: StoryPlacement? = nil) {
+        reading = (destination, placement, Date())
         presentedDestination = destination
+    }
+
+    /// Called when the reader is dismissed; logs how long it was open.
+    func readerDidClose() {
+        guard let reading else { return }
+        self.reading = nil
+        EngagementLog.shared.record(
+            .closeReader,
+            reading.destination.item,
+            placement: reading.placement,
+            readingSeconds: Int(Date().timeIntervalSince(reading.since))
+        )
     }
 }
 
@@ -21,12 +37,17 @@ struct ArticleOpener {
     let userState: FeedUserStateStore
     let openURL: OpenURLAction
 
-    func open(_ destination: ArticleDestination) {
+    func open(_ destination: ArticleDestination, placement: StoryPlacement? = nil) {
+        EngagementLog.shared.record(
+            destination.kind == .article ? .open : .openDiscussion,
+            destination.item,
+            placement: placement
+        )
         userState.markRead(destination.item)
 
 #if os(iOS)
         if preferences.opensLinksInApp {
-            router.present(destination)
+            router.present(destination, placement: placement)
         } else {
             openURL(destination.url)
         }

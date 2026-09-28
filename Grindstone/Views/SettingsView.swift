@@ -5,9 +5,11 @@ struct SettingsView: View {
     @EnvironmentObject private var feedUserState: FeedUserStateStore
     @EnvironmentObject private var rssStore: ManualRSSFeedStore
     @EnvironmentObject private var vm: FeedViewModel
+    @EnvironmentObject private var engagement: EngagementLog
 
     @State private var isConfirmingClearRead = false
     @State private var isConfirmingClearSaved = false
+    @State private var isConfirmingClearSignals = false
 
     var body: some View {
         NavigationStack {
@@ -16,6 +18,7 @@ struct SettingsView: View {
                 readingSection
                 sourcesSection
                 historySection
+                signalsSection
                 aboutSection
             }
             .formStyle(.grouped)
@@ -41,6 +44,17 @@ struct SettingsView: View {
                 Button("Remove All Saved Stories", role: .destructive) {
                     feedUserState.clearSavedItems()
                 }
+            }
+            .confirmationDialog(
+                "Clear reading signals?",
+                isPresented: $isConfirmingClearSignals,
+                titleVisibility: .visible
+            ) {
+                Button("Clear Reading Signals", role: .destructive) {
+                    engagement.clear()
+                }
+            } message: {
+                Text("Grindstone starts learning from scratch. Read and saved stories are not affected.")
             }
         }
     }
@@ -123,6 +137,7 @@ struct SettingsView: View {
         Section {
             Group {
                 Button("Mark Everything as Read", systemImage: "checkmark.circle") {
+                    engagement.recordMarkAllRead(vm.searchCorpus, userState: feedUserState)
                     feedUserState.markRead(vm.searchCorpus)
                 }
                 .disabled(feedUserState.unreadCount(in: vm.searchCorpus) == 0)
@@ -140,6 +155,24 @@ struct SettingsView: View {
             .raisedFormRow()
         } header: {
             SettingsHeader("History")
+        }
+    }
+
+    private var signalsSection: some View {
+        Section {
+            Group {
+                LabeledContent("Recorded Events", value: engagement.eventCount.formatted())
+
+                Button("Clear Reading Signals", systemImage: "trash", role: .destructive) {
+                    isConfirmingClearSignals = true
+                }
+                .disabled(engagement.eventCount == 0)
+            }
+            .raisedFormRow()
+        } header: {
+            SettingsHeader("Reading Signals")
+        } footer: {
+            SettingsFooter("Grindstone keeps a private record of what you open, save, and skip, so it can learn what you like. It doesn't change the order of your feed yet, and it never leaves this device.")
         }
     }
 
