@@ -73,6 +73,11 @@ struct FeedView: View {
             }
             .navigationTitle("Grindstone")
             .navigationSubtitle(subtitle)
+#if os(iOS)
+            // A large title leaves a tall empty header above the filter bar's
+            // safe-area inset until the list scrolls, so keep it compact.
+            .navigationBarTitleDisplayMode(.inline)
+#endif
             .toolbar {
                 feedToolbar
             }
