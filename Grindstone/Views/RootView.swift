@@ -21,9 +21,12 @@ struct RootView: View {
                 SavedArticlesView()
             }
 
+#if !os(macOS)
+            // The Mac opens settings in their own window instead (⌘,).
             Tab("Settings", systemImage: "slider.horizontal.3", value: AppTab.settings) {
                 SettingsView()
             }
+#endif
 
             Tab(value: AppTab.search, role: .search) {
                 SearchView()

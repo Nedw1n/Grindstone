@@ -21,6 +21,7 @@ struct RSSFeedManagerView: View {
             backupSection
         }
         .formStyle(.grouped)
+        .readableMeasure(Theme.formWidth)
         .paperBackground()
         .navigationTitle("RSS Feeds")
         .fileImporter(

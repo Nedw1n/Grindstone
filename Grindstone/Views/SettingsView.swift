@@ -19,6 +19,7 @@ struct SettingsView: View {
                 aboutSection
             }
             .formStyle(.grouped)
+            .readableMeasure(Theme.formWidth)
             .paperBackground()
             .navigationTitle("Settings")
             .confirmationDialog(

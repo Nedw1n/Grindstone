@@ -84,6 +84,7 @@ struct FeedView: View {
                 }
             }
             .listStyle(.plain)
+            .readableMeasure()
             .paperBackground()
             .safeAreaInset(edge: .top, spacing: 0) {
                 filterBar
@@ -139,6 +140,8 @@ struct FeedView: View {
 
     private var filterBar: some View {
         FilterBar(selection: $vm.filter, sources: vm.visibleSources)
+            // Lines the tabs up with the story column on iPad and Mac.
+            .frame(maxWidth: Theme.readableWidth)
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity)
 #if os(visionOS)
@@ -162,7 +165,6 @@ struct FeedView: View {
             Button("Refresh", systemImage: "arrow.clockwise") {
                 Task { await vm.refresh() }
             }
-            .keyboardShortcut("r", modifiers: .command)
             .disabled(vm.isLoading)
         }
 #endif

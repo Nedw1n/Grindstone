@@ -35,6 +35,7 @@ struct SavedArticlesView: View {
                         }
                     }
                     .listStyle(.plain)
+                    .readableMeasure()
                 }
             }
             .paperBackground()

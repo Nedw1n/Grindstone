@@ -20,7 +20,12 @@ list, and flags stories that show up in more than one place.
 - **Search** – searches every fetched story, not just the front page, plus the
   saved list.
 - **Settings** – switch built-in sources on or off, manage RSS feeds (with OPML
-  import and export), and clear history.
+  import and export), and clear history. On the Mac it opens in its own
+  window (⌘,).
+- **iPad and Mac** – the tabs become a sidebar, and stories sit in a centered
+  reading column instead of stretching across the window. A Feed menu adds
+  ⌘R to refresh, ⌘1–⌘5 to pick a source, and ⇧⌘H to hide read stories; the
+  same shortcuts work from an iPad keyboard. iPhone layouts are unchanged.
 
 ## Design: Stone & Paper
 

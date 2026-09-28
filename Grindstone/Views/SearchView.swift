@@ -44,6 +44,7 @@ struct SearchView: View {
                         }
                     }
                     .listStyle(.plain)
+                    .readableMeasure()
                 }
             }
             .paperBackground()

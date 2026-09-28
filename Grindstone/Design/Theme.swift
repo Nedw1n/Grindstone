@@ -39,6 +39,11 @@ enum Theme {
 
     /// Strength of the granite grain on stone surfaces.
     static let stoneGrainOpacity = 0.3
+
+    /// The widest a column of stories gets on iPad and Mac.
+    static let readableWidth: CGFloat = 720
+    /// The widest a settings form gets on iPad and Mac.
+    static let formWidth: CGFloat = 640
 }
 
 extension EdgeInsets {
@@ -70,6 +75,35 @@ extension View {
     /// A form row on a raised paper card.
     func raisedFormRow() -> some View {
         modifier(RaisedFormRow())
+    }
+
+    /// Centers a list or form in a column no wider than `maxWidth`, with paper
+    /// on either side. At iPhone widths the column is already narrower, so the
+    /// system margins are left alone and nothing changes.
+    func readableMeasure(_ maxWidth: CGFloat = Theme.readableWidth) -> some View {
+        modifier(ReadableMeasure(maxWidth: maxWidth))
+    }
+}
+
+private struct ReadableMeasure: ViewModifier {
+    let maxWidth: CGFloat
+
+    @State private var containerWidth: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        content
+            .contentMargins(.horizontal, sideMargin, for: .scrollContent)
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.width
+            } action: { width in
+                containerWidth = width
+            }
+    }
+
+    /// `nil` keeps the system's own margins.
+    private var sideMargin: CGFloat? {
+        let margin = (containerWidth - maxWidth) / 2
+        return margin > 0 ? margin : nil
     }
 }
 
