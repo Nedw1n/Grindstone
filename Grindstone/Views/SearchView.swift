@@ -11,19 +11,30 @@ struct SearchView: View {
         NavigationStack {
             Group {
                 if trimmedQuery.isEmpty {
-                    ContentUnavailableView {
-                        Label("Search Grindstone", systemImage: "magnifyingglass")
-                    } description: {
-                        Text("Find stories by title, outlet, or snippet across every source and your saved list.")
-                    }
+                    StoneEmptyState(
+                        "Search every story",
+                        message: "Find stories by title, outlet, or snippet across every source and your saved list."
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if results.isEmpty {
-                    ContentUnavailableView.search(text: trimmedQuery)
+                    StoneEmptyState(
+                        "No matches for “\(trimmedQuery)”",
+                        message: "Try another word, or the name of an outlet."
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List {
+                        SectionEyebrow(results.count == 1 ? "1 story" : "\(results.count) stories")
+                            .listRowInsets(EdgeInsets.sectionEyebrow)
+                            .listRowSeparator(.hidden)
+                            .paperListRow()
+
                         ForEach(results) { item in
                             ArticleLink(destination: .article(item)) {
                                 FeedItemRow(item: item, showPreview: preferences.showPreviews)
                             }
+                            .listRowInsets(EdgeInsets.storyRow)
+                            .paperListRow()
                             .swipeActions(edge: .leading, allowsFullSwipe: true) {
                                 SaveSwipeButton(item: item)
                             }
@@ -35,6 +46,7 @@ struct SearchView: View {
                     .listStyle(.plain)
                 }
             }
+            .paperBackground()
             .navigationTitle("Search")
             .searchable(text: $query, prompt: "Titles, outlets, snippets")
             .navigationDestination(for: ArticleDestination.self) { destination in

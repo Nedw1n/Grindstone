@@ -21,6 +21,7 @@ struct RSSFeedManagerView: View {
             backupSection
         }
         .formStyle(.grouped)
+        .paperBackground()
         .navigationTitle("RSS Feeds")
         .fileImporter(
             isPresented: $isShowingOPMLImporter,
@@ -46,30 +47,33 @@ struct RSSFeedManagerView: View {
 
     private var composerSection: some View {
         Section {
-            TextField("https://example.com/feed.xml", text: $draftURL)
-                .autocorrectionDisabled()
+            Group {
+                TextField("https://example.com/feed.xml", text: $draftURL)
+                    .autocorrectionDisabled()
 #if os(iOS)
-                .textContentType(.URL)
-                .keyboardType(.URL)
-                .textInputAutocapitalization(.never)
+                    .textContentType(.URL)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
 #endif
-                .onSubmit(addFeed)
+                    .onSubmit(addFeed)
 
-            TextField("Name (optional)", text: $draftTitle)
-                .onSubmit(addFeed)
+                TextField("Name (optional)", text: $draftTitle)
+                    .onSubmit(addFeed)
 
-            if let composerErrorMessage {
-                Text(composerErrorMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
+                if let composerErrorMessage {
+                    Text(composerErrorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+
+                Button("Add Feed", systemImage: "plus.circle.fill", action: addFeed)
+                    .disabled(draftURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-
-            Button("Add Feed", systemImage: "plus.circle.fill", action: addFeed)
-                .disabled(draftURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .raisedFormRow()
         } header: {
-            Text("Add a Feed")
+            SettingsHeader("Add a Feed")
         } footer: {
-            Text("Paste an RSS or Atom link. Leave the name blank to use the site's domain.")
+            SettingsFooter("Paste an RSS or Atom link. Leave the name blank to use the site's domain.")
         }
     }
 
@@ -77,17 +81,20 @@ struct RSSFeedManagerView: View {
         Section {
             if rssStore.feeds.isEmpty {
                 Text("No feeds yet. Add one above, or import an OPML file below.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.inkMuted)
+                    .raisedFormRow()
             } else {
                 ForEach(rssStore.feeds) { feed in
                     Toggle(isOn: enabledBinding(for: feed)) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(feed.title)
+                                .foregroundStyle(Theme.ink)
                             Text(feed.displayHost)
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Theme.inkMuted)
                         }
                     }
+                    .raisedFormRow()
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                         Button(role: .destructive) {
                             rssStore.removeFeed(id: feed.id)
@@ -109,10 +116,10 @@ struct RSSFeedManagerView: View {
             }
         } header: {
             HStack {
-                Text("Your Feeds")
+                SettingsHeader("Your Feeds")
                 Spacer()
                 if !rssStore.feeds.isEmpty {
-                    Text("\(rssStore.enabledFeeds.count) of \(rssStore.feeds.count) on")
+                    SettingsHeader("\(rssStore.enabledFeeds.count) of \(rssStore.feeds.count) on")
                 }
             }
         }
@@ -120,23 +127,26 @@ struct RSSFeedManagerView: View {
 
     private var backupSection: some View {
         Section {
-            Button("Import OPML…", systemImage: "square.and.arrow.down") {
-                transferStatus = nil
-                isShowingOPMLImporter = true
-            }
+            Group {
+                Button("Import OPML…", systemImage: "square.and.arrow.down") {
+                    transferStatus = nil
+                    isShowingOPMLImporter = true
+                }
 
-            Button("Export OPML…", systemImage: "square.and.arrow.up", action: prepareOPMLExport)
-                .disabled(rssStore.feeds.isEmpty)
+                Button("Export OPML…", systemImage: "square.and.arrow.up", action: prepareOPMLExport)
+                    .disabled(rssStore.feeds.isEmpty)
 
-            if let transferStatus {
-                Text(transferStatus.message)
-                    .font(.footnote)
-                    .foregroundStyle(transferStatus.tone.color)
+                if let transferStatus {
+                    Text(transferStatus.message)
+                        .font(.footnote)
+                        .foregroundStyle(transferStatus.tone.color)
+                }
             }
+            .raisedFormRow()
         } header: {
-            Text("Backup")
+            SettingsHeader("Backup")
         } footer: {
-            Text("OPML is the standard format for moving a feed list between readers.")
+            SettingsFooter("OPML is the standard format for moving a feed list between readers.")
         }
     }
 
@@ -236,7 +246,7 @@ private enum RSSLibraryTransferTone {
     var color: Color {
         switch self {
         case .success:
-            return .secondary
+            return Theme.inkMuted
         case .error:
             return .red
         }

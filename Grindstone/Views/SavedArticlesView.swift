@@ -9,17 +9,19 @@ struct SavedArticlesView: View {
         NavigationStack {
             Group {
                 if feedUserState.savedItems.isEmpty {
-                    ContentUnavailableView {
-                        Label("No Saved Stories", systemImage: "bookmark")
-                    } description: {
-                        Text("Swipe a story to the right, or hold it and choose Save for Later. It will wait for you here.")
-                    }
+                    StoneEmptyState(
+                        "Nothing set aside",
+                        message: "Swipe right on a story, or press and hold it and choose Save for Later. It will keep here until you're ready."
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List {
                         ForEach(feedUserState.savedItems) { item in
                             ArticleLink(destination: .article(item)) {
                                 FeedItemRow(item: item, showPreview: preferences.showPreviews)
                             }
+                            .listRowInsets(EdgeInsets.storyRow)
+                            .paperListRow()
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button(role: .destructive) {
                                     feedUserState.unsave(item)
@@ -35,6 +37,7 @@ struct SavedArticlesView: View {
                     .listStyle(.plain)
                 }
             }
+            .paperBackground()
             .navigationTitle("Saved")
             .navigationSubtitle(subtitle)
             .toolbar {
@@ -50,7 +53,7 @@ struct SavedArticlesView: View {
                                 isConfirmingRemoveAll = true
                             }
                         } label: {
-                            Label("Options", systemImage: "ellipsis.circle")
+                            Label("Options", systemImage: "ellipsis")
                         }
                     }
                 }

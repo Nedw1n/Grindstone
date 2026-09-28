@@ -67,8 +67,9 @@ final class FeedViewModel: ObservableObject {
         preferences.visibleSources
     }
 
-    /// Stories for the featured strip: cross-posted stories first (the app's
-    /// strongest signal that something matters), then the top story of each source.
+    /// The three stories for Top of the Stack: cross-posted stories first (the
+    /// app's strongest signal that something matters), then the top story of each
+    /// source.
     var featured: [FeedItem] {
         var picks: [FeedItem] = []
         var seen = Set<String>()
@@ -85,7 +86,7 @@ final class FeedViewModel: ObservableObject {
             picks.append(top)
         }
 
-        return Array(picks.prefix(6))
+        return Array(picks.prefix(3))
     }
 
     /// Items filtered by the selected source tab.

@@ -13,7 +13,7 @@ struct RootView: View {
 
     var body: some View {
         TabView(selection: $selectedTab) {
-            Tab("Feed", systemImage: "newspaper", value: AppTab.feed) {
+            Tab("Today", systemImage: "square.stack.3d.up", value: AppTab.feed) {
                 FeedView()
             }
 
@@ -21,7 +21,7 @@ struct RootView: View {
                 SavedArticlesView()
             }
 
-            Tab("Settings", systemImage: "gearshape", value: AppTab.settings) {
+            Tab("Settings", systemImage: "slider.horizontal.3", value: AppTab.settings) {
                 SettingsView()
             }
 

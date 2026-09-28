@@ -36,12 +36,14 @@ enum Source: String, CaseIterable, Identifiable, Hashable, Codable, Sendable {
         }
     }
 
+    /// A muted mineral tint (rust, slate, verdigris, heather) that sits with the
+    /// stone palette. Sources are told apart by name first; color only backs it up.
     var color: Color {
         switch self {
-        case .hn: return .orange
-        case .memo: return .blue
-        case .biotech: return .teal
-        case .rss: return .indigo
+        case .hn: return Color("SourceHN")
+        case .memo: return Color("SourceMemo")
+        case .biotech: return Color("SourceBio")
+        case .rss: return Color("SourceRSS")
         }
     }
 

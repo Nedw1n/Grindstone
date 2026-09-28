@@ -17,59 +17,76 @@ struct FeedView: View {
     var body: some View {
         NavigationStack {
             List {
-                if vm.filter == nil, !vm.featured.isEmpty {
-                    Section {
-                        FeaturedStrip(items: vm.featured)
-                            .listRowInsets(EdgeInsets())
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
+                if !vm.failures.isEmpty {
+                    FeedFailureBanner(
+                        failures: vm.failures,
+                        onRetry: { Task { await vm.refresh() } },
+                        onDismiss: { vm.dismissFailures() }
+                    )
+                    .listRowInsets(FeedInsets.card)
+                    .listRowSeparator(.hidden)
+                    .paperListRow()
+                }
+
+                if isRSSLaneUnconfigured {
+                    RSSLibraryPromptRow(hasFeeds: !rssStore.feeds.isEmpty) {
+                        isShowingRSSLibrary = true
+                    }
+                    .listRowInsets(FeedInsets.card)
+                    .listRowSeparator(.hidden)
+                    .paperListRow()
+                }
+
+                if !stackItems.isEmpty {
+                    SectionEyebrow("Top of the Stack", detail: "Cross-posted first")
+                        .listRowInsets(FeedInsets.eyebrow)
+                        .listRowSeparator(.hidden)
+                        .paperListRow()
+
+                    StoneStack(items: stackItems, showPreview: preferences.showPreviews, now: now)
+                        .listRowInsets(FeedInsets.stack)
+                        .listRowSeparator(.hidden)
+                        .paperListRow()
+                }
+
+                if !streamItems.isEmpty {
+                    SectionEyebrow(streamTitle, detail: "\(streamItems.count)")
+                        .listRowInsets(FeedInsets.eyebrow)
+                        .listRowSeparator(.hidden)
+                        .paperListRow()
+
+                    ForEach(streamItems) { item in
+                        ArticleLink(destination: .article(item)) {
+                            FeedItemRow(item: item, showPreview: preferences.showPreviews, now: now)
+                        }
+                        .listRowInsets(FeedInsets.story)
+                        .paperListRow()
+                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                            SaveSwipeButton(item: item)
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            ReadSwipeButton(item: item)
+                        }
                     }
                 }
 
-                Section {
-                    if !vm.failures.isEmpty {
-                        FeedFailureBanner(
-                            failures: vm.failures,
-                            onRetry: { Task { await vm.refresh() } },
-                            onDismiss: { vm.dismissFailures() }
-                        )
+                if !onScreenItems.isEmpty {
+                    FeedEndMarker(unreadCount: feedUserState.unreadCount(in: onScreenItems)) {
+                        isConfirmingMarkAllRead = true
+                    }
+                    .listRowSeparator(.hidden)
+                    .paperListRow()
+                } else if !vm.isLoading, !isRSSLaneUnconfigured {
+                    emptyState
+                        .frame(maxWidth: .infinity)
                         .listRowSeparator(.hidden)
-                    }
-
-                    if isRSSLaneUnconfigured {
-                        RSSLibraryPromptRow(hasFeeds: !rssStore.feeds.isEmpty) {
-                            isShowingRSSLibrary = true
-                        }
-                        .listRowSeparator(.hidden)
-                    }
-
-                    if visibleItems.isEmpty {
-                        if !vm.isLoading, !isRSSLaneUnconfigured {
-                            emptyState
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 24)
-                                .listRowSeparator(.hidden)
-                        }
-                    } else {
-                        ForEach(visibleItems) { item in
-                            ArticleLink(destination: .article(item)) {
-                                FeedItemRow(item: item, showPreview: preferences.showPreviews, now: now)
-                            }
-                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                SaveSwipeButton(item: item)
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                ReadSwipeButton(item: item)
-                            }
-                        }
-                    }
+                        .paperListRow()
                 }
             }
             .listStyle(.plain)
+            .paperBackground()
             .safeAreaInset(edge: .top, spacing: 0) {
-                FilterBar(selection: $vm.filter, sources: vm.visibleSources)
-                    .padding(.vertical, 8)
-                    .background(.bar)
+                filterBar
             }
             .navigationTitle("Grindstone")
             .navigationSubtitle(subtitle)
@@ -86,7 +103,11 @@ struct FeedView: View {
             }
             .overlay {
                 if vm.isLoading && vm.items.isEmpty {
-                    ProgressView("Loading stories…")
+                    StoneEmptyState(
+                        "Gathering stories",
+                        message: "Checking your sources for the latest.",
+                        isBalancing: true
+                    )
                 }
             }
             .task {
@@ -96,12 +117,12 @@ struct FeedView: View {
                 now = date
             }
             .confirmationDialog(
-                "Mark \(visibleItems.count) stories as read?",
+                markAllReadTitle,
                 isPresented: $isConfirmingMarkAllRead,
                 titleVisibility: .visible
             ) {
                 Button("Mark as Read") {
-                    feedUserState.markRead(visibleItems)
+                    feedUserState.markRead(onScreenItems)
                 }
             }
             .sheet(isPresented: $isShowingRSSLibrary) {
@@ -112,6 +133,24 @@ struct FeedView: View {
                 DetailView(destination: destination)
             }
         }
+    }
+
+    // MARK: Filter bar
+
+    private var filterBar: some View {
+        FilterBar(selection: $vm.filter, sources: vm.visibleSources)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity)
+#if os(visionOS)
+            .background(.bar)
+#else
+            .background(Theme.paper)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Theme.hairline)
+                    .frame(height: 0.5)
+            }
+#endif
     }
 
     // MARK: Toolbar
@@ -138,27 +177,60 @@ struct FeedView: View {
                 Button("Mark All as Read", systemImage: "checkmark.circle") {
                     isConfirmingMarkAllRead = true
                 }
-                .disabled(feedUserState.unreadCount(in: visibleItems) == 0)
+                .disabled(feedUserState.unreadCount(in: onScreenItems) == 0)
 
                 Button("Manage RSS Feeds", systemImage: "dot.radiowaves.left.and.right") {
                     isShowingRSSLibrary = true
                 }
             } label: {
-                Label("Options", systemImage: "ellipsis.circle")
+                Label("Options", systemImage: "ellipsis")
             }
         }
     }
 
     // MARK: Derived state
 
+    /// The source filter applied, with read stories dropped when they are hidden.
     private var visibleItems: [FeedItem] {
         let base = vm.filtered
         guard preferences.hideReadItems else { return base }
         return base.filter { !feedUserState.isRead($0) }
     }
 
+    /// Top of the Stack, shown only on the unfiltered front page.
+    private var stackItems: [FeedItem] {
+        guard vm.filter == nil else { return [] }
+        let featured = vm.featured
+        guard preferences.hideReadItems else { return featured }
+        return featured.filter { !feedUserState.isRead($0) }
+    }
+
+    /// Everything below the stack. Stories already on a stone are left out.
+    private var streamItems: [FeedItem] {
+        let stackIDs = Set(stackItems.map(\.id))
+        guard !stackIDs.isEmpty else { return visibleItems }
+        return visibleItems.filter { !stackIDs.contains($0.id) }
+    }
+
+    /// Every story on screen, stack and stream together, without repeats.
+    private var onScreenItems: [FeedItem] {
+        stackItems + streamItems
+    }
+
+    private var streamTitle: String {
+        if let source = vm.filter {
+            return source.rawValue
+        }
+        return stackItems.isEmpty ? "All Stories" : "More Stories"
+    }
+
     private var isRSSLaneUnconfigured: Bool {
         vm.filter == .rss && rssStore.enabledFeeds.isEmpty
+    }
+
+    private var markAllReadTitle: String {
+        let unread = feedUserState.unreadCount(in: onScreenItems)
+        return unread == 1 ? "Mark 1 story as read?" : "Mark \(unread) stories as read?"
     }
 
     private var subtitle: String {
@@ -168,8 +240,8 @@ struct FeedView: View {
 
         var parts: [String] = []
 
-        if !visibleItems.isEmpty {
-            let unread = feedUserState.unreadCount(in: visibleItems)
+        if !onScreenItems.isEmpty {
+            let unread = feedUserState.unreadCount(in: onScreenItems)
             parts.append(unread == 0 ? "All caught up" : "\(unread) unread")
         }
 
@@ -183,33 +255,34 @@ struct FeedView: View {
     @ViewBuilder
     private var emptyState: some View {
         if preferences.hideReadItems, !vm.filtered.isEmpty {
-            ContentUnavailableView {
-                Label("All Caught Up", systemImage: "checkmark.circle")
-            } description: {
-                Text("Every story here is marked read.")
-            } actions: {
+            StoneEmptyState("The stack is clear", message: "Every story here has been read.") {
                 Button("Show Read Stories") {
                     preferences.hideReadItems = false
                 }
+                .buttonStyle(.pebble)
             }
         } else if let source = vm.filter {
-            ContentUnavailableView {
-                Label("Nothing from \(source.rawValue)", systemImage: source.iconName)
-            } description: {
-                Text("Pull to refresh, or check back in a little while.")
-            }
+            StoneEmptyState(
+                "Nothing from \(source.rawValue)",
+                message: "Pull to refresh, or check back in a little while."
+            )
         } else {
-            ContentUnavailableView {
-                Label("No Stories Yet", systemImage: "tray")
-            } description: {
-                Text("Pull to refresh to load the latest from your sources.")
-            } actions: {
+            StoneEmptyState("No stories yet", message: "Pull down to gather the latest from your sources.") {
                 Button("Refresh") {
                     Task { await vm.refresh() }
                 }
+                .buttonStyle(.pebble)
             }
         }
     }
+}
+
+/// Row insets for the feed's list, so every row lines up on the same margins.
+private enum FeedInsets {
+    static let story = EdgeInsets.storyRow
+    static let eyebrow = EdgeInsets.sectionEyebrow
+    static let stack = EdgeInsets(top: 4, leading: 16, bottom: 14, trailing: 16)
+    static let card = EdgeInsets(top: 10, leading: 16, bottom: 6, trailing: 16)
 }
 
 #Preview {

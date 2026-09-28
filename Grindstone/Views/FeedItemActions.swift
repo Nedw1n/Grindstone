@@ -94,7 +94,7 @@ struct SaveSwipeButton: View {
                 systemImage: isSaved ? "bookmark.slash" : "bookmark"
             )
         }
-        .tint(.accentColor)
+        .tint(isSaved ? StoneTone.dark.fill : Theme.mossDeep)
     }
 }
 
@@ -114,7 +114,7 @@ struct ReadSwipeButton: View {
                 systemImage: isRead ? "circle" : "checkmark.circle"
             )
         }
-        .tint(isRead ? .gray : .blue)
+        .tint(isRead ? StoneTone.dark.fill : StoneTone.mid.fill)
     }
 }
 

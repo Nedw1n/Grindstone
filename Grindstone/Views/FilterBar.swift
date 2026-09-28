@@ -1,87 +1,81 @@
 import SwiftUI
 
+/// Source filters as a row of quiet text tabs. The selected tab rests on a
+/// raised paper pebble that slides between them.
 struct FilterBar: View {
     @Binding var selection: Source?
     let sources: [Source]
 
+    @Namespace private var pebble
+
     var body: some View {
         ScrollView(.horizontal) {
-            HStack(spacing: 8) {
-                FilterChip(
-                    title: "All",
-                    systemImage: "square.grid.2x2",
-                    tint: nil,
-                    isSelected: selection == nil
-                ) {
+            HStack(spacing: 2) {
+                FilterTab(title: "All", source: nil, isSelected: selection == nil, namespace: pebble) {
                     selection = nil
                 }
 
                 ForEach(sources) { source in
-                    FilterChip(
+                    FilterTab(
                         title: source.shortName,
-                        systemImage: source.iconName,
-                        tint: source.color,
-                        isSelected: selection == source
+                        source: source,
+                        isSelected: selection == source,
+                        namespace: pebble
                     ) {
                         selection = source
                     }
                 }
             }
-            .padding(.horizontal)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 2)
+            // Scoped to the bar, so the pebble slides without animating the list.
+            .animation(.snappy(duration: 0.28), value: selection)
         }
         .scrollIndicators(.hidden)
         .sensoryFeedback(.selection, trigger: selection)
     }
 }
 
-private struct FilterChip: View {
+private struct FilterTab: View {
     let title: String
-    let systemImage: String
-    /// `nil` renders the neutral "All" chip.
-    let tint: Color?
+    /// `nil` is the "All" tab, which has no source dot.
+    let source: Source?
     let isSelected: Bool
+    let namespace: Namespace.ID
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .labelStyle(.titleAndIcon)
-                .font(.subheadline.weight(.semibold))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .foregroundStyle(foreground)
-                .background(background, in: Capsule())
-                .overlay(
+            HStack(spacing: 6) {
+                if let source {
+                    SourceDot(source: source)
+                }
+                Text(title)
+            }
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(isSelected ? Theme.ink : Theme.inkMuted)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .background {
+                if isSelected {
                     Capsule()
-                        .strokeBorder(baseColor.opacity(isSelected ? 0 : 0.2), lineWidth: 1)
-                )
-                .contentShape(Capsule())
+                        .fill(Theme.paperRaised)
+                        .overlay {
+                            Capsule().strokeBorder(Theme.hairline, lineWidth: 0.5)
+                        }
+                        .shadow(color: Theme.shadow.opacity(0.12), radius: 4, x: 0, y: 2)
+                        .matchedGeometryEffect(id: "selection", in: namespace)
+                }
+            }
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .animation(.easeInOut(duration: 0.15), value: isSelected)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
-
-    private var baseColor: Color {
-        tint ?? .primary
-    }
-
-    private var foreground: AnyShapeStyle {
-        if isSelected {
-            return tint == nil ? AnyShapeStyle(.background) : AnyShapeStyle(.white)
-        }
-        return AnyShapeStyle(baseColor)
-    }
-
-    private var background: AnyShapeStyle {
-        if isSelected {
-            return AnyShapeStyle(baseColor)
-        }
-        return AnyShapeStyle(baseColor.opacity(0.10))
     }
 }
 
 #Preview {
-    FilterBar(selection: .constant(.hn), sources: Source.allCases)
+    FilterBar(selection: .constant(nil), sources: Source.allCases)
         .padding(.vertical)
+        .background(Theme.paper)
 }
