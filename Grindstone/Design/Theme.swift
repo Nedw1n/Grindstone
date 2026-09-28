@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 /// Stone & Paper, the app's visual language. It comes straight from the icon:
 /// three granite stones balanced on warm paper. Surfaces are paper, text is
@@ -77,33 +80,24 @@ extension View {
         modifier(RaisedFormRow())
     }
 
-    /// Centers a list or form in a column no wider than `maxWidth`, with paper
-    /// on either side. At iPhone widths the column is already narrower, so the
-    /// system margins are left alone and nothing changes.
+    /// Caps a list or form at `maxWidth` and centers it, with paper on either
+    /// side. iPhone screens are narrower than the cap, so nothing changes there.
     func readableMeasure(_ maxWidth: CGFloat = Theme.readableWidth) -> some View {
-        modifier(ReadableMeasure(maxWidth: maxWidth))
+        frame(maxWidth: maxWidth)
+            .frame(maxWidth: .infinity)
     }
 }
 
-private struct ReadableMeasure: ViewModifier {
-    let maxWidth: CGFloat
-
-    @State private var containerWidth: CGFloat = 0
-
-    func body(content: Content) -> some View {
-        content
-            .contentMargins(.horizontal, sideMargin, for: .scrollContent)
-            .onGeometryChange(for: CGFloat.self) { proxy in
-                proxy.size.width
-            } action: { width in
-                containerWidth = width
-            }
-    }
-
-    /// `nil` keeps the system's own margins.
-    private var sideMargin: CGFloat? {
-        let margin = (containerWidth - maxWidth) / 2
-        return margin > 0 ? margin : nil
+/// Where the app may use layouts of its own for large screens.
+enum LayoutPlatform {
+    /// iPad, Mac, and Vision Pro. iPhone keeps its layout at every width,
+    /// including a large iPhone in landscape.
+    static var allowsWideLayouts: Bool {
+#if os(iOS)
+        return UIDevice.current.userInterfaceIdiom != .phone
+#else
+        return true
+#endif
     }
 }
 

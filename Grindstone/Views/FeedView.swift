@@ -10,84 +10,24 @@ struct FeedView: View {
     @State private var isShowingRSSLibrary = false
     @State private var isConfirmingMarkAllRead = false
     @State private var now = Date()
+    @State private var availableWidth: CGFloat = 0
 
     /// Re-renders relative timestamps ("3m ago") once a minute.
     private let clock = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
     var body: some View {
         NavigationStack {
-            List {
-                if !vm.failures.isEmpty {
-                    FeedFailureBanner(
-                        failures: vm.failures,
-                        onRetry: { Task { await vm.refresh() } },
-                        onDismiss: { vm.dismissFailures() }
-                    )
-                    .listRowInsets(FeedInsets.card)
-                    .listRowSeparator(.hidden)
-                    .paperListRow()
-                }
-
-                if isRSSLaneUnconfigured {
-                    RSSLibraryPromptRow(hasFeeds: !rssStore.feeds.isEmpty) {
-                        isShowingRSSLibrary = true
-                    }
-                    .listRowInsets(FeedInsets.card)
-                    .listRowSeparator(.hidden)
-                    .paperListRow()
-                }
-
-                if !stackItems.isEmpty {
-                    SectionEyebrow("Top of the Stack", detail: "Cross-posted first")
-                        .listRowInsets(FeedInsets.eyebrow)
-                        .listRowSeparator(.hidden)
-                        .paperListRow()
-
-                    StoneStack(items: stackItems, showPreview: preferences.showPreviews, now: now)
-                        .listRowInsets(FeedInsets.stack)
-                        .listRowSeparator(.hidden)
-                        .paperListRow()
-                }
-
-                if !streamItems.isEmpty {
-                    SectionEyebrow(streamTitle, detail: "\(streamItems.count)")
-                        .listRowInsets(FeedInsets.eyebrow)
-                        .listRowSeparator(.hidden)
-                        .paperListRow()
-
-                    ForEach(streamItems) { item in
-                        ArticleLink(destination: .article(item)) {
-                            FeedItemRow(item: item, showPreview: preferences.showPreviews, now: now)
-                        }
-                        .listRowInsets(FeedInsets.story)
-                        .paperListRow()
-                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                            SaveSwipeButton(item: item)
-                        }
-                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                            ReadSwipeButton(item: item)
-                        }
-                    }
-                }
-
-                if !onScreenItems.isEmpty {
-                    FeedEndMarker(unreadCount: feedUserState.unreadCount(in: onScreenItems)) {
-                        isConfirmingMarkAllRead = true
-                    }
-                    .listRowSeparator(.hidden)
-                    .paperListRow()
-                } else if !vm.isLoading, !isRSSLaneUnconfigured {
-                    emptyState
-                        .frame(maxWidth: .infinity)
-                        .listRowSeparator(.hidden)
-                        .paperListRow()
+            Group {
+                if usesWideLayout {
+                    wideLayout
+                } else {
+                    storyList(showsStack: true)
                 }
             }
-            .listStyle(.plain)
-            .readableMeasure()
-            .paperBackground()
-            .safeAreaInset(edge: .top, spacing: 0) {
-                filterBar
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.width
+            } action: { width in
+                availableWidth = width
             }
             .navigationTitle("Grindstone")
             .navigationSubtitle(subtitle)
@@ -98,9 +38,6 @@ struct FeedView: View {
 #endif
             .toolbar {
                 feedToolbar
-            }
-            .refreshable {
-                await vm.refresh()
             }
             .overlay {
                 if vm.isLoading && vm.items.isEmpty {
@@ -136,12 +73,111 @@ struct FeedView: View {
         }
     }
 
+    // MARK: Layouts
+
+    /// iPad and Mac: Top of the Stack gets a rail of its own beside the
+    /// stories, so the stones keep the proportions of pebbles instead of
+    /// stretching across the window. The pair is centered on very wide windows.
+    private var wideLayout: some View {
+        HStack(spacing: 0) {
+            StackRail(items: railItems, showPreview: preferences.showPreviews, now: now)
+
+            Rectangle()
+                .fill(Theme.hairline)
+                .frame(width: 0.5)
+
+            storyList(showsStack: false)
+                .frame(maxWidth: FeedWideLayout.storyColumnMaxWidth)
+        }
+        .frame(maxWidth: FeedWideLayout.maxWidth)
+        .frame(maxWidth: .infinity)
+        .background(Theme.paper)
+    }
+
+    /// The story list. On iPhone it carries the stack at the top; in the wide
+    /// layout the stack lives in the rail instead.
+    private func storyList(showsStack: Bool) -> some View {
+        List {
+            if !vm.failures.isEmpty {
+                FeedFailureBanner(
+                    failures: vm.failures,
+                    onRetry: { Task { await vm.refresh() } },
+                    onDismiss: { vm.dismissFailures() }
+                )
+                .listRowInsets(FeedInsets.card)
+                .listRowSeparator(.hidden)
+                .paperListRow()
+            }
+
+            if isRSSLaneUnconfigured {
+                RSSLibraryPromptRow(hasFeeds: !rssStore.feeds.isEmpty) {
+                    isShowingRSSLibrary = true
+                }
+                .listRowInsets(FeedInsets.card)
+                .listRowSeparator(.hidden)
+                .paperListRow()
+            }
+
+            if showsStack, !stackItems.isEmpty {
+                SectionEyebrow("Top of the Stack", detail: "Cross-posted first")
+                    .listRowInsets(FeedInsets.eyebrow)
+                    .listRowSeparator(.hidden)
+                    .paperListRow()
+
+                StoneStack(items: stackItems, showPreview: preferences.showPreviews, now: now)
+                    .listRowInsets(FeedInsets.stack)
+                    .listRowSeparator(.hidden)
+                    .paperListRow()
+            }
+
+            if !streamItems.isEmpty {
+                SectionEyebrow(streamTitle, detail: "\(streamItems.count)")
+                    .listRowInsets(FeedInsets.eyebrow)
+                    .listRowSeparator(.hidden)
+                    .paperListRow()
+
+                ForEach(streamItems) { item in
+                    ArticleLink(destination: .article(item)) {
+                        FeedItemRow(item: item, showPreview: preferences.showPreviews, now: now)
+                    }
+                    .listRowInsets(FeedInsets.story)
+                    .paperListRow()
+                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                        SaveSwipeButton(item: item)
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        ReadSwipeButton(item: item)
+                    }
+                }
+            }
+
+            if !onScreenItems.isEmpty {
+                FeedEndMarker(unreadCount: feedUserState.unreadCount(in: onScreenItems)) {
+                    isConfirmingMarkAllRead = true
+                }
+                .listRowSeparator(.hidden)
+                .paperListRow()
+            } else if !vm.isLoading, !isRSSLaneUnconfigured {
+                emptyState
+                    .frame(maxWidth: .infinity)
+                    .listRowSeparator(.hidden)
+                    .paperListRow()
+            }
+        }
+        .listStyle(.plain)
+        .paperBackground()
+        .safeAreaInset(edge: .top, spacing: 0) {
+            filterBar
+        }
+        .refreshable {
+            await vm.refresh()
+        }
+    }
+
     // MARK: Filter bar
 
     private var filterBar: some View {
         FilterBar(selection: $vm.filter, sources: vm.visibleSources)
-            // Lines the tabs up with the story column on iPad and Mac.
-            .frame(maxWidth: Theme.readableWidth)
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity)
 #if os(visionOS)
@@ -205,6 +241,20 @@ struct FeedView: View {
         let featured = vm.featured
         guard preferences.hideReadItems else { return featured }
         return featured.filter { !feedUserState.isRead($0) }
+    }
+
+    /// The rail's stones in the wide layout. Unlike the in-list stack, the
+    /// rail stays put when a source filter is chosen.
+    private var railItems: [FeedItem] {
+        let featured = vm.featured
+        guard preferences.hideReadItems else { return featured }
+        return featured.filter { !feedUserState.isRead($0) }
+    }
+
+    private var usesWideLayout: Bool {
+        LayoutPlatform.allowsWideLayouts
+            && availableWidth >= FeedWideLayout.minimumWidth
+            && !railItems.isEmpty
     }
 
     /// Everything below the stack. Stories already on a stone are left out.
@@ -276,6 +326,58 @@ struct FeedView: View {
                 .buttonStyle(.pebble)
             }
         }
+    }
+}
+
+/// Measurements for the iPad and Mac layout.
+private enum FeedWideLayout {
+    /// Below this width the phone layout is used, rail and all folded into one list.
+    static let minimumWidth: CGFloat = 760
+    static let railWidth: CGFloat = 340
+    static let storyColumnMaxWidth: CGFloat = 760
+    static let maxWidth: CGFloat = railWidth + storyColumnMaxWidth
+}
+
+/// The wide layout's left column: a dated masthead over Top of the Stack.
+private struct StackRail: View {
+    let items: [FeedItem]
+    let showPreview: Bool
+    let now: Date
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(now.formatted(.dateTime.weekday(.wide)))
+                        .font(.system(.largeTitle, design: .serif).weight(.semibold))
+                        .foregroundStyle(Theme.ink)
+
+                    Text(now.formatted(.dateTime.month(.wide).day()))
+                        .font(.system(.title3, design: .serif))
+                        .foregroundStyle(Theme.inkMuted)
+                }
+                .padding(.horizontal, 4)
+                .accessibilityElement(children: .combine)
+
+                SectionEyebrow("Top of the Stack")
+                    .padding(.horizontal, 4)
+                    .padding(.top, 28)
+                    .padding(.bottom, 12)
+
+                StoneStack(items: items, showPreview: showPreview, now: now)
+
+                Text("Cross-posted stories come first, then the top story from each source.")
+                    .font(.footnote)
+                    .foregroundStyle(Theme.inkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 4)
+                    .padding(.top, 16)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 24)
+        }
+        .scrollIndicators(.hidden)
+        .frame(width: FeedWideLayout.railWidth)
     }
 }
 
