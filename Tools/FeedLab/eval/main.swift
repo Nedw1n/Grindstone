@@ -14,12 +14,13 @@ struct SnapshotInfo: Decodable {
     let notes: [String]
     let files: [String: String]
     let analysis: [String: BioRxivAnalysis]?
+    let disabledSources: [String]?
 }
 
 struct BioRxivAnalysis: Decodable {
-    let total: Int
-    let first_page_dates: [String]
-    let all_dates: [String]
+    let total: Int?
+    let first_page_dates: [String]?
+    let all_dates: [String]?
 }
 
 struct Summary: Codable {
@@ -90,9 +91,15 @@ for directory in snapshotDirectories {
     let suite = "feedlab.replay"
     let defaults = UserDefaults(suiteName: suite)!
     defaults.removePersistentDomain(forName: suite)
+    let preferences = FeedPreferences(defaults: defaults)
+    for name in info.disabledSources ?? [] {
+        if let source = Source(rawValue: name) {
+            preferences.setEnabled(false, for: source)
+        }
+    }
     let viewModel = FeedViewModel(
         rssStore: ManualRSSFeedStore(defaults: defaults),
-        preferences: FeedPreferences(defaults: defaults)
+        preferences: preferences
     )
     await viewModel.refresh()
 
@@ -185,8 +192,15 @@ for directory in snapshotDirectories {
         report += "- \(source.rawValue) lane: \(lane.count) stories, newest \(format(ages.min() ?? 0)) h, oldest \(format(ages.max() ?? 0)) h; "
             + outlets.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: ", ") + "\n"
     }
-    for (key, analysis) in (info.analysis ?? [:]).sorted(by: { $0.key < $1.key }) {
-        report += "- \(key): \(analysis.total) in window; app's first page covers \(analysis.first_page_dates.first ?? "?")…\(analysis.first_page_dates.last ?? "?"), window runs to \(analysis.all_dates.last ?? "?")\n"
+    for (key, analysis) in (info.analysis ?? [:]).sorted(by: { $0.key < $1.key }) where key.hasPrefix("biorxiv") {
+        report += "- \(key): \(analysis.total ?? 0) in window; app's first page covers \(analysis.first_page_dates?.first ?? "?")…\(analysis.first_page_dates?.last ?? "?"), window runs to \(analysis.all_dates?.last ?? "?")\n"
+    }
+    if let memoLane = lanes[.memo], !memoLane.isEmpty {
+        // No feed entry means no discussion link and a stand-in date at midnight UTC.
+        let standIn = memoLane.filter { $0.discussionURL == nil }
+        let skew = standIn.map { hours(moment.timeIntervalSince($0.publishedAt)) }
+        report += "- Memeorandum lane: \(standIn.count) of \(memoLane.count) stories have no feed entry, so a stand-in date"
+            + (skew.isEmpty ? "" : " (they read as \(format(skew.min() ?? 0))–\(format(skew.max() ?? 0)) h old)") + "\n"
     }
 
     // Cross-posted stories, with every member, for checking by hand.
@@ -235,6 +249,36 @@ for directory in snapshotDirectories {
         report += nearMisses.sorted { $0.0 > $1.0 }.prefix(12).map { "- \($0.1)" }.joined(separator: "\n") + "\n"
     }
     report += "\n"
+
+    // Everything the app produced, for trying alternatives offline.
+    func export(_ item: FeedItem, laneIndex: Int?, laneCount: Int?) -> [String: Any] {
+        var row: [String: Any] = [
+            "id": item.id, "title": item.title, "url": item.url.absoluteString, "source": label(item.source),
+            "outlet": item.displayOutlet ?? "", "publishedAt": item.publishedAt.timeIntervalSince1970,
+            "intraSourceRank": item.intraSourceRank, "crossRefs": item.orderedCrossRefs.map(label),
+            "hasDiscussion": item.discussionURL != nil, "isUndated": item.isUndated,
+            "points": item.points ?? -1, "comments": item.commentCount ?? -1, "key": item.normalizedURL,
+            "score": FeedRankingEngine.score(for: item, now: moment),
+        ]
+        if let laneIndex { row["laneIndex"] = laneIndex }
+        if let laneCount { row["laneCount"] = laneCount }
+        return row
+    }
+    var laneExport: [String: Any] = [:]
+    for (source, lane) in lanes {
+        laneExport[label(source)] = lane.enumerated().map { export($0.element, laneIndex: $0.offset, laneCount: lane.count) }
+    }
+    let exportObject: [String: Any] = [
+        "id": info.id, "time": moment.timeIntervalSince1970,
+        "front": front.map { export($0, laneIndex: nil, laneCount: nil) },
+        "featured": featured.map(\.id),
+        "leadIDs": merged.leadIDs,
+        "lanes": laneExport,
+    ]
+    let exportDirectory = URL(fileURLWithPath: reportURL.path + ".lanes")
+    try FileManager.default.createDirectory(at: exportDirectory, withIntermediateDirectories: true)
+    try JSONSerialization.data(withJSONObject: exportObject, options: [.sortedKeys])
+        .write(to: exportDirectory.appendingPathComponent("\(info.id).json"))
 
     summaries.append(Summary(
         snapshot: info.id,

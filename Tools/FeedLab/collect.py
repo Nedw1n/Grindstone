@@ -1,28 +1,31 @@
 #!/usr/bin/env python3
-"""Collects what Grindstone's sources looked like at past moments.
+"""Collects snapshots of Grindstone's sources for replay.
 
-For each snapshot time it saves the responses the app would have received,
-keyed the way `replay/ReplayNetworking.swift` looks them up, so the app's own
-services, merging, and ranking can be replayed over them:
+Two kinds of snapshot:
 
-  Hacker News    Wayback Machine capture of the front page (and page 2 when
-                 archived), turned into the topstories.json / item JSON the
-                 app requests.
-  Memeorandum    memeorandum's own archive page for that time. Its RSS feed
-                 isn't archived, so a stand-in feed.xml carries each story's
-                 first appearance in the hourly archives as its date.
-  bioRxiv        The API, over the week up to the snapshot's day (cursor 0,
-                 exactly as the app asks), plus every page for analysis.
-  arXiv          The API, with the app's query limited to submissions before
-                 the snapshot.
-  STAT, Nature,  Wayback capture of the feed nearest the snapshot, else the
-  Marginal Rev.  live feed, with entries published after the snapshot removed.
+  live      Exactly what the app would fetch right now: HN's topstories and
+            item JSON, memeorandum's homepage and feed.xml, bioRxiv and arXiv
+            with the app's own queries and dates, and the STAT, Nature and
+            Marginal Revolution feeds. Nothing is reconstructed.
+
+  history   Past moments, rebuilt from what the sources still serve:
+            - Hacker News: its per-day archive (front?day=), ranked at the
+              snapshot time with HN's published gravity formula. Final point
+              counts stand in for the counts at the time; `live` records how
+              close this reconstruction comes to the real front page.
+            - bioRxiv and arXiv: the APIs, bounded to the snapshot time.
+            - STAT, Nature, Marginal Revolution: the live feeds with later
+              entries removed. Feeds only reach back a day or three, so older
+              snapshots note when a feed no longer covers them.
+            - Memeorandum: its archive pages are blocked (Cloudflare) and its
+              feed holds only the newest hour, so history snapshots replay with
+              Memeorandum switched off, a setting the app offers.
 
 Usage:
-  collect.py --days 2026-09-25 2026-09-26 --times 08:00 13:00 18:00 22:00 \
-      --out Tools/FeedLab/data
+  collect.py live [--out DIR]
+  collect.py history --days 2026-09-22 ... --times 13:00 21:00 [--out DIR]
 
-Times are US Eastern (memeorandum's clock). Only the standard library is used.
+Times are US Eastern. Only the standard library is used.
 """
 
 import argparse
@@ -30,6 +33,7 @@ import datetime as dt
 import email.utils
 import html
 import json
+import math
 import os
 import re
 import sys
@@ -41,8 +45,9 @@ from zoneinfo import ZoneInfo
 
 EASTERN = ZoneInfo("America/New_York")
 UTC = dt.timezone.utc
-USER_AGENT = "GrindstoneFeedLab/1.0 (feed ranking research; polite, cached)"
-REQUEST_PAUSE = 1.0
+USER_AGENT = "GrindstoneFeedLab/1.0 (feed ranking research)"
+REQUEST_PAUSE = 0.5
+HN_LANE = 60  # HNService.fetch(limit: 60)
 
 FEEDS = {
     "www.statnews.com/feed/": "https://www.statnews.com/feed/",
@@ -72,14 +77,11 @@ class Fetcher:
         self.last_request = 0.0
 
     def get(self, url, *, use_cache=True):
-        """Returns (final_url, bytes). Raises on HTTP errors after retries."""
         key = re.sub(r"[^A-Za-z0-9._-]+", "_", url)[:200]
-        body_path = os.path.join(self.cache_dir, key)
-        meta_path = body_path + ".url"
-        if use_cache and os.path.exists(body_path) and os.path.exists(meta_path):
-            with open(body_path, "rb") as f, open(meta_path) as m:
-                return m.read().strip(), f.read()
-
+        path = os.path.join(self.cache_dir, key)
+        if use_cache and os.path.exists(path):
+            with open(path, "rb") as f:
+                return f.read()
         last_error = None
         for attempt in range(4):
             wait = self.last_request + REQUEST_PAUSE - time.time()
@@ -90,52 +92,36 @@ class Fetcher:
                 request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
                 with urllib.request.urlopen(request, timeout=60) as response:
                     body = response.read()
-                    final_url = response.geturl()
-                with open(body_path, "wb") as f:
-                    f.write(body)
-                with open(meta_path, "w") as m:
-                    m.write(final_url)
-                return final_url, body
+                if use_cache:
+                    with open(path, "wb") as f:
+                        f.write(body)
+                return body
             except urllib.error.HTTPError as error:
                 last_error = error
-                if error.code in (404, 403):
+                if error.code in (403, 404):
                     break
-            except Exception as error:  # network hiccup
+            except Exception as error:
                 last_error = error
             time.sleep(2 ** (attempt + 1))
         raise RuntimeError(f"GET {url} failed: {last_error}")
 
 
-def wayback(fetcher, url, moment):
-    """Nearest Wayback capture of `url` to `moment`. Returns (capture_time, bytes)."""
-    stamp = moment.astimezone(UTC).strftime("%Y%m%d%H%M%S")
-    final_url, body = fetcher.get(f"https://web.archive.org/web/{stamp}id_/{url}")
-    match = re.search(r"/web/(\d{14})", final_url)
-    captured = (
-        dt.datetime.strptime(match.group(1), "%Y%m%d%H%M%S").replace(tzinfo=UTC) if match else None
-    )
-    return captured, body
-
-
 # MARK: - Hacker News
 
-def parse_hn_page(page_html, rank_offset=0):
-    """Stories on an archived HN listing page, in order."""
+def parse_hn_page(page_html):
+    """Stories on an HN listing page, in order."""
     stories = []
     rows = re.finditer(
         r"<tr[^>]*class=['\"]athing[^'\"]*['\"][^>]*id=['\"](\d+)['\"][^>]*>(.*?)</tr>\s*<tr[^>]*>(.*?)</tr>",
         page_html,
         re.S,
     )
-    for index, row in enumerate(rows):
+    for row in rows:
         item_id, head, sub = int(row.group(1)), row.group(2), row.group(3)
-        link = re.search(r'<span class="titleline"[^>]*>\s*<a href="([^"]+)"[^>]*>(.*?)</a>', head, re.S) or re.search(
-            r'<a href="([^"]+)"[^>]*class="(?:storylink|titlelink)"[^>]*>(.*?)</a>', head, re.S
-        )
+        link = re.search(r'<span class="titleline"[^>]*>\s*<a href="([^"]+)"[^>]*>(.*?)</a>', head, re.S)
         if not link:
             continue
         href = html.unescape(link.group(1))
-        title = html.unescape(re.sub(r"<[^>]+>", "", link.group(2))).strip()
         score = re.search(r'class="score"[^>]*>(\d+)\s+point', sub)
         age = re.search(r'class="age"[^>]*title="([^"]+)"', sub)
         comments = re.search(r">(\d+)(?:&nbsp;|\s)+comments?</a>", sub)
@@ -145,139 +131,116 @@ def parse_hn_page(page_html, rank_offset=0):
             if len(parts) > 1 and parts[1].isdigit():
                 posted = int(parts[1])
             else:
-                try:
-                    posted = int(dt.datetime.fromisoformat(parts[0]).replace(tzinfo=UTC).timestamp())
-                except ValueError:
-                    posted = None
+                posted = int(dt.datetime.fromisoformat(parts[0]).replace(tzinfo=UTC).timestamp())
         is_job = score is None and "hnuser" not in sub
         stories.append(
             {
                 "id": item_id,
-                "rank": rank_offset + index + 1,
                 "type": "job" if is_job else "story",
-                "title": title,
+                "title": html.unescape(re.sub(r"<[^>]+>", "", link.group(2))).strip(),
                 "url": None if href.startswith("item?id=") else urllib.parse.urljoin("https://news.ycombinator.com/", href),
                 "score": int(score.group(1)) if score else None,
-                "descendants": int(comments.group(1)) if comments else (0 if not is_job else None),
+                "descendants": int(comments.group(1)) if comments else (None if is_job else 0),
                 "time": posted,
             }
         )
     return stories
 
 
-def collect_hn(fetcher, moment, files, notes):
-    captured, body = wayback(fetcher, "https://news.ycombinator.com/", moment)
-    stories = parse_hn_page(body.decode("utf-8", "replace"))
-    if not stories:
-        notes.append("Hacker News: archived front page had no parseable stories")
-        return
-    offset_minutes = abs((captured - moment).total_seconds()) / 60 if captured else None
-    notes.append(f"Hacker News: capture {captured.isoformat() if captured else '?'} "
-                 f"({offset_minutes:.0f} min from snapshot), {len(stories)} stories on page 1")
-    try:
-        captured2, body2 = wayback(fetcher, "https://news.ycombinator.com/?p=2", moment)
-        if captured2 and abs((captured2 - moment).total_seconds()) < 3 * 3600:
-            more = parse_hn_page(body2.decode("utf-8", "replace"), rank_offset=len(stories))
-            known = {s["id"] for s in stories}
-            stories += [s for s in more if s["id"] not in known]
-            notes.append(f"Hacker News: page 2 capture {captured2.isoformat()}, now {len(stories)} stories")
-        else:
-            notes.append("Hacker News: no page 2 capture within 3 hours; lane has page 1 only")
-    except RuntimeError as error:
-        notes.append(f"Hacker News: page 2 unavailable ({error})")
+def hn_day(fetcher, day, pages=3):
+    stories, seen = [], set()
+    for page in range(1, pages + 1):
+        body = fetcher.get(f"https://news.ycombinator.com/front?day={day}&p={page}", use_cache=day < dt.date.today())
+        for story in parse_hn_page(body.decode("utf-8", "replace")):
+            if story["id"] not in seen:
+                seen.add(story["id"])
+                stories.append(story)
+    return stories
 
+
+def hn_gravity_rank(stories, moment):
+    """HN's published ranking, (points - 1)^0.8 / (age + 2)^1.8, at `moment`."""
+    now = moment.timestamp()
+    ranked = []
+    for story in stories:
+        if story["type"] != "story" or story["time"] is None or story["time"] > now:
+            continue
+        age_hours = (now - story["time"]) / 3600
+        if age_hours > 48:
+            continue
+        points = max((story["score"] or 1) - 1, 0)
+        ranked.append((points ** 0.8 / (age_hours + 2) ** 1.8, story))
+    ranked.sort(key=lambda pair: -pair[0])
+    return [story for _, story in ranked]
+
+
+def write_hn(files, stories):
     files["hacker-news.firebaseio.com/v0/topstories.json"] = json.dumps([s["id"] for s in stories])
     for story in stories:
-        item = {k: v for k, v in story.items() if k not in ("rank",) and v is not None}
-        files[f"hacker-news.firebaseio.com/v0/item/{story['id']}.json"] = json.dumps(item)
+        files[f"hacker-news.firebaseio.com/v0/item/{story['id']}.json"] = json.dumps(
+            {k: v for k, v in story.items() if v is not None}
+        )
+
+
+def hn_history(fetcher, moment, files, notes):
+    local_day = moment.astimezone(UTC).date()
+    pool = {}
+    for day in (local_day - dt.timedelta(days=1), local_day):
+        for story in hn_day(fetcher, day):
+            pool.setdefault(story["id"], story)
+    ranked = hn_gravity_rank(pool.values(), moment)[:HN_LANE]
+    write_hn(files, ranked)
+    notes.append(f"Hacker News: reconstructed from front?day archives ({len(pool)} candidates), "
+                 f"top {len(ranked)} by HN gravity at the snapshot using final points")
+
+
+def hn_live(fetcher, files, notes, analysis):
+    ids = json.loads(fetcher.get("https://hacker-news.firebaseio.com/v0/topstories.json", use_cache=False))
+    files["hacker-news.firebaseio.com/v0/topstories.json"] = json.dumps(ids[:HN_LANE])
+    live = []
+    for item_id in ids[:HN_LANE]:
+        body = fetcher.get(f"https://hacker-news.firebaseio.com/v0/item/{item_id}.json", use_cache=False)
+        files[f"hacker-news.firebaseio.com/v0/item/{item_id}.json"] = body.decode()
+        live.append(json.loads(body))
+    notes.append(f"Hacker News: live topstories, {len(live)} items")
+
+    # How well does the history reconstruction match the real front page?
+    now = dt.datetime.now(UTC)
+    pool = {}
+    for day in (now.date() - dt.timedelta(days=1), now.date()):
+        for story in hn_day(fetcher, day):
+            pool.setdefault(story["id"], story)
+    for item in live:  # the per-day archive can lag; include live items with current points
+        if item and item.get("type") == "story":
+            pool.setdefault(item["id"], {"id": item["id"], "type": "story", "score": item.get("score"), "time": item.get("time")})
+    rebuilt = [s["id"] for s in hn_gravity_rank(pool.values(), now)[:HN_LANE]]
+    real = [i for i in ids[:HN_LANE]]
+    overlap20 = len(set(rebuilt[:20]) & set(real[:20]))
+    common = [i for i in real[:30] if i in rebuilt]
+    positions = [rebuilt.index(i) for i in common]
+    concordant = sum(1 for a in range(len(positions)) for b in range(a + 1, len(positions)) if positions[a] < positions[b])
+    pairs = len(positions) * (len(positions) - 1) // 2
+    tau = (2 * concordant - pairs) / pairs if pairs else float("nan")
+    analysis["hn_reconstruction"] = {"top20_overlap": overlap20, "kendall_tau_top30": tau}
+    notes.append(f"Hacker News reconstruction check: rebuilt top 20 shares {overlap20}/20 with the real one; "
+                 f"order agreement (Kendall τ over real top 30) {tau:.2f}")
 
 
 # MARK: - Memeorandum
 
-MEMO_ITEM_ID = re.compile(r'<DIV CLASS="item" ID="([^"]+)"')
-MEMO_MARKER = '<SPAN CLASS="rnhd2">Top Items:</SPAN>'
-
-
-def memo_archive(fetcher, moment):
-    local = moment.astimezone(EASTERN)
-    url = f"https://www.memeorandum.com/{local:%y%m%d}/h{local:%H%M}"
-    _, body = fetcher.get(url)
-    return url, body.decode("utf-8", "replace")
-
-
-def memo_top_ids(page_html):
-    start = page_html.find(MEMO_MARKER)
-    if start < 0:
-        return []
-    return MEMO_ITEM_ID.findall(page_html[start:])
-
-
-def memo_top_items(page_html):
-    """(id, title) for each Top Items cluster lead, as the app's parser reads them."""
-    start = page_html.find(MEMO_MARKER)
-    if start < 0:
-        return []
-    items = []
-    for cluster in page_html[start:].split('<DIV CLASS="clus">')[1:]:
-        item_id = MEMO_ITEM_ID.search(cluster)
-        title = re.search(r'<DIV CLASS="ii"><STRONG CLASS="L\d"><A HREF="[^"]+">(.*?)</A>', cluster, re.S)
-        if item_id and title:
-            items.append((item_id.group(1), html.unescape(re.sub(r"<[^>]+>", "", title.group(1))).strip()))
-    return items
-
-
-def collect_memo(fetcher, moment, first_seen, files, notes):
-    url, page = memo_archive(fetcher, moment)
-    items = memo_top_items(page)
-    if not items:
-        notes.append(f"Memeorandum: {url} had no Top Items; trying the Wayback Machine")
-        captured, body = wayback(fetcher, "https://www.memeorandum.com/", moment)
-        page = body.decode("utf-8", "replace")
-        items = memo_top_items(page)
-        notes.append(f"Memeorandum: Wayback capture {captured}, {len(items)} items")
-    else:
-        notes.append(f"Memeorandum: {url}, {len(items)} top items")
-    files["www.memeorandum.com/"] = page
-
-    # Stand-in RSS: the archive has no feed, so each item is dated by when it
-    # first appeared in the hourly archives (an upper bound on when it was posted).
-    entries = []
-    undated = 0
-    for item_id, title in items:
-        seen = first_seen.get(item_id)
-        if seen is None or seen > moment:
-            seen = moment
-            undated += 1
-        permalink = f"https://www.memeorandum.com/{item_id[:6]}/{item_id[6:]}#a{item_id}"
-        entries.append(
-            f"<item><title>{html.escape(title)}</title><link>{html.escape(permalink)}</link>"
-            f"<pubDate>{email.utils.format_datetime(seen.astimezone(UTC))}</pubDate></item>"
-        )
-    if undated:
-        notes.append(f"Memeorandum: {undated} items not in earlier hourly archives, dated at the snapshot")
-    files["www.memeorandum.com/feed.xml"] = (
-        '<?xml version="1.0"?><rss version="2.0"><channel><title>memeorandum</title>'
-        + "".join(entries)
-        + "</channel></rss>"
-    )
-
-
-def memo_first_seen(fetcher, start, end, notes):
-    """ID -> first hourly archive (Eastern) the item appears in, between start and end."""
-    first_seen = {}
-    moment = start.astimezone(EASTERN).replace(minute=0, second=0, microsecond=0)
-    missing = 0
-    while moment <= end:
-        try:
-            _, page = memo_archive(fetcher, moment)
-            for item_id in memo_top_ids(page):
-                first_seen.setdefault(item_id, moment)
-        except RuntimeError:
-            missing += 1
-        moment += dt.timedelta(hours=1)
-    if missing:
-        notes.append(f"Memeorandum: {missing} hourly archives unavailable for first-seen dating")
-    return first_seen
+def memo_live(fetcher, files, notes, analysis):
+    homepage = fetcher.get("https://www.memeorandum.com/", use_cache=False).decode("utf-8", "replace")
+    feed = fetcher.get("https://www.memeorandum.com/feed.xml", use_cache=False).decode("utf-8", "replace")
+    files["www.memeorandum.com/"] = homepage
+    files["www.memeorandum.com/feed.xml"] = feed
+    marker = homepage.find('<SPAN CLASS="rnhd2">Top Items:</SPAN>')
+    top_ids = re.findall(r'<DIV CLASS="item" ID="([^"]+)"', homepage[marker:]) if marker >= 0 else []
+    feed_ids = set(re.findall(r"#a(\d{6}p\d+)", feed)) | {
+        a + b for a, b in re.findall(r"memeorandum\.com/(\d{6})/(p\d+)", feed)
+    }
+    covered = sum(1 for i in top_ids if i in feed_ids)
+    analysis["memo_feed_coverage"] = {"top_items": len(top_ids), "in_feed": covered}
+    notes.append(f"Memeorandum: live homepage ({len(top_ids)} top items); feed.xml covers {covered} of them")
 
 
 # MARK: - Feeds
@@ -299,7 +262,6 @@ def parse_feed_date(text):
 
 
 def trim_feed(xml, moment):
-    """Removes entries published after `moment`. Returns (xml, kept, removed, oldest)."""
     kept, removed, oldest = 0, 0, None
 
     def keep_or_drop(match):
@@ -317,80 +279,104 @@ def trim_feed(xml, moment):
     return ITEM_BLOCK.sub(keep_or_drop, xml), kept, removed, oldest
 
 
-def collect_feeds(fetcher, moment, files, notes):
+WORDPRESS_FEEDS = {"www.statnews.com/feed/", "marginalrevolution.com/feed"}
+
+
+def wordpress_feed_at(fetcher, url, moment, pages=12):
+    """The feed as it stood at `moment`: WordPress serves older entries with
+    ?paged=N, so the newest page-one-sized set published by then is rebuilt."""
+    first = fetcher.get(url).decode("utf-8", "replace")
+    page_size = len(ITEM_BLOCK.findall(first))
+    entries, seen = [], set()
+    for page in range(1, pages + 1):
+        body = first if page == 1 else fetcher.get(f"{url}?paged={page}").decode("utf-8", "replace")
+        blocks = ITEM_BLOCK.findall(body)
+        for block in blocks:
+            link = re.search(r"<link>(.*?)</link>", block, re.S)
+            date = DATE_TAG.search(block)
+            published = parse_feed_date(date.group(2)) if date else None
+            key = link.group(1).strip() if link else block[:200]
+            if published and key not in seen:
+                seen.add(key)
+                entries.append((published, block))
+        if not blocks or min(p for p, _ in entries) < moment - dt.timedelta(days=3):
+            break
+    chosen = sorted((e for e in entries if e[0] <= moment), key=lambda e: e[0], reverse=True)[:page_size]
+    head = first[: first.find(ITEM_BLOCK.search(first).group(0))] if ITEM_BLOCK.search(first) else first
+    tail = first[first.rfind("</channel>"):] if "</channel>" in first else ""
+    xml = head + "".join(block for _, block in chosen) + tail
+    return xml, len(chosen), (chosen[-1][0] if chosen else None)
+
+
+def feeds(fetcher, moment, files, notes, *, live):
     for key, url in FEEDS.items():
-        body, origin = None, None
-        try:
-            captured, body = wayback(fetcher, url, moment)
-            if captured and abs((captured - moment).total_seconds()) <= 36 * 3600:
-                origin = f"Wayback {captured.isoformat()}"
-            else:
-                body = None
-        except RuntimeError:
-            body = None
-        if body is None:
-            _, body = fetcher.get(url, use_cache=True)
-            origin = "live feed"
-        xml, kept, removed, oldest = trim_feed(body.decode("utf-8", "replace"), moment)
-        notes.append(
-            f"{key}: {origin}, kept {kept} entries (dropped {removed} newer), "
-            f"oldest {oldest.isoformat() if oldest else '?'}"
-        )
+        body = fetcher.get(url, use_cache=not live).decode("utf-8", "replace")
+        if live:
+            files[key] = body
+            continue
+        if key in WORDPRESS_FEEDS:
+            xml, kept, oldest = wordpress_feed_at(fetcher, url, moment)
+            files[key] = xml
+            notes.append(f"{key}: rebuilt as of the snapshot from its paged archive, {kept} entries"
+                         + (f" back to {oldest:%Y-%m-%d %H:%M}Z" if oldest else ""))
+            continue
+        xml, kept, removed, oldest = trim_feed(body, moment)
         files[key] = xml
+        partial = oldest is None or (moment - oldest) < dt.timedelta(hours=24)
+        notes.append(f"{key}: live feed trimmed to the snapshot, {kept} entries"
+                     + (f" back to {oldest:%Y-%m-%d %H:%M}Z" if oldest else "")
+                     + (" (PARTIAL: the feed no longer reaches a day before this snapshot)" if partial else ""))
 
 
 # MARK: - bioRxiv and arXiv
 
-def collect_biorxiv(fetcher, moment, files, notes, analysis):
+def biorxiv(fetcher, moment, files, notes, analysis, *, live):
     end = moment.astimezone(UTC).date()
     start = end - dt.timedelta(days=7)
     for category in BIORXIV_CATEGORIES:
-        url = f"https://api.biorxiv.org/details/biorxiv/{start}/{end}/0/json?category={category}"
-        _, body = fetcher.get(url)
+        first_url = f"https://api.biorxiv.org/details/biorxiv/{start}/{end}/0/json?category={category}"
+        body = fetcher.get(first_url, use_cache=not live)
         files[f"biorxiv/{category}"] = body.decode("utf-8", "replace")
         first = json.loads(body)
         total = int(first.get("messages", [{}])[0].get("total", 0) or 0)
         records = list(first.get("collection", []))
         cursor = len(records)
         while cursor < total:
-            _, more = fetcher.get(
-                f"https://api.biorxiv.org/details/biorxiv/{start}/{end}/{cursor}/json?category={category}"
-            )
-            page = json.loads(more).get("collection", [])
+            page = json.loads(fetcher.get(
+                f"https://api.biorxiv.org/details/biorxiv/{start}/{end}/{cursor}/json?category={category}",
+                use_cache=not live,
+            )).get("collection", [])
             if not page:
                 break
             records += page
             cursor += len(page)
+        first_dates = sorted({r["date"] for r in first.get("collection", [])})
+        all_dates = sorted({r["date"] for r in records})
         analysis[f"biorxiv/{category}"] = {
             "total": total,
-            "first_page_dates": sorted({r["date"] for r in first.get("collection", [])}),
-            "all_dates": sorted({r["date"] for r in records}),
+            "first_page_dates": first_dates,
+            "all_dates": all_dates,
+            "category_matches": sum(1 for r in first.get("collection", []) if r.get("category", "").lower() == category),
         }
-        notes.append(f"bioRxiv/{category}: {total} records {start}..{end}; app reads the first "
-                     f"{len(first.get('collection', []))}")
+        notes.append(f"bioRxiv/{category}: {total} records {start}..{end}; the app reads the first "
+                     f"{len(first.get('collection', []))}, dated {first_dates[0] if first_dates else '?'}.."
+                     f"{first_dates[-1] if first_dates else '?'}")
 
 
-def collect_arxiv(fetcher, moment, files, notes):
-    end = moment.astimezone(UTC)
-    start = end - dt.timedelta(days=30)
-    query = f"({ARXIV_QUERY}) AND submittedDate:[{start:%Y%m%d%H%M} TO {end:%Y%m%d%H%M}]"
-    url = "https://export.arxiv.org/api/query?" + urllib.parse.urlencode(
-        {
-            "search_query": query,
-            "start": 0,
-            "max_results": ARXIV_MAX_RESULTS,
-            "sortBy": "submittedDate",
-            "sortOrder": "descending",
-        }
-    )
-    _, body = fetcher.get(url)
+def arxiv(fetcher, moment, files, notes, *, live):
+    params = {"search_query": ARXIV_QUERY, "start": 0, "max_results": ARXIV_MAX_RESULTS,
+              "sortBy": "submittedDate", "sortOrder": "descending"}
+    if not live:
+        end = moment.astimezone(UTC)
+        params["search_query"] = f"({ARXIV_QUERY}) AND submittedDate:[{end - dt.timedelta(days=30):%Y%m%d%H%M} TO {end:%Y%m%d%H%M}]"
+    body = fetcher.get("https://export.arxiv.org/api/query?" + urllib.parse.urlencode(params), use_cache=not live)
     files["arxiv"] = body.decode("utf-8", "replace")
-    notes.append(f"arXiv: {body.count(b'<entry>')} entries submitted before the snapshot")
+    notes.append(f"arXiv: {body.count(b'<entry>')} entries")
 
 
 # MARK: - Driver
 
-def write_snapshot(out_dir, snapshot_id, moment, files, notes, analysis):
+def write_snapshot(out_dir, snapshot_id, moment, files, notes, analysis, disabled=()):
     directory = os.path.join(out_dir, snapshot_id)
     os.makedirs(directory, exist_ok=True)
     manifest = {}
@@ -400,55 +386,58 @@ def write_snapshot(out_dir, snapshot_id, moment, files, notes, analysis):
             f.write(content)
         manifest[key] = name
     with open(os.path.join(directory, "snapshot.json"), "w") as f:
-        json.dump(
-            {
-                "id": snapshot_id,
-                "time": moment.astimezone(UTC).isoformat(),
-                "notes": notes,
-                "files": manifest,
-                "analysis": analysis,
-            },
-            f,
-            indent=2,
-        )
+        json.dump({"id": snapshot_id, "time": moment.astimezone(UTC).isoformat(timespec="seconds"),
+                   "notes": notes, "files": manifest, "analysis": analysis,
+                   "disabledSources": list(disabled)}, f, indent=2)
+
+
+def run_steps(steps, notes):
+    for name, step in steps:
+        try:
+            step()
+        except Exception as error:
+            notes.append(f"{name}: FAILED ({error})")
+            print(f"   {name} failed: {error}", file=sys.stderr, flush=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--days", nargs="+", required=True, help="YYYY-MM-DD, Eastern")
-    parser.add_argument("--times", nargs="+", default=["08:00", "13:00", "18:00", "22:00"], help="HH:MM, Eastern")
-    parser.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "data"))
+    parser.add_argument("mode", choices=["live", "history"])
+    parser.add_argument("--days", nargs="*", default=[])
+    parser.add_argument("--times", nargs="*", default=["13:00", "21:00"])
+    parser.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
     args = parser.parse_args()
-
-    moments = sorted(
-        dt.datetime.combine(dt.date.fromisoformat(day), dt.time.fromisoformat(t), tzinfo=EASTERN)
-        for day in args.days
-        for t in args.times
-    )
     fetcher = Fetcher(os.path.join(args.out, ".cache"))
 
-    window_notes = []
-    first_seen = memo_first_seen(fetcher, moments[0] - dt.timedelta(hours=36), moments[-1], window_notes)
-
-    for moment in moments:
-        snapshot_id = moment.strftime("%Y-%m-%d_%H%M")
-        print(f"== {snapshot_id}", flush=True)
-        files, notes, analysis = {}, list(window_notes), {}
-        for name, step in [
-            ("Hacker News", lambda: collect_hn(fetcher, moment, files, notes)),
-            ("Memeorandum", lambda: collect_memo(fetcher, moment, first_seen, files, notes)),
-            ("feeds", lambda: collect_feeds(fetcher, moment, files, notes)),
-            ("bioRxiv", lambda: collect_biorxiv(fetcher, moment, files, notes, analysis)),
-            ("arXiv", lambda: collect_arxiv(fetcher, moment, files, notes)),
-        ]:
-            try:
-                step()
-            except Exception as error:  # keep going; the replay reports the source as failed
-                notes.append(f"{name}: FAILED ({error})")
-                print(f"   {name} failed: {error}", file=sys.stderr, flush=True)
+    if args.mode == "live":
+        moment = dt.datetime.now(UTC).replace(microsecond=0)
+        files, notes, analysis = {}, [], {}
+        run_steps([
+            ("Hacker News", lambda: hn_live(fetcher, files, notes, analysis)),
+            ("Memeorandum", lambda: memo_live(fetcher, files, notes, analysis)),
+            ("feeds", lambda: feeds(fetcher, moment, files, notes, live=True)),
+            ("bioRxiv", lambda: biorxiv(fetcher, moment, files, notes, analysis, live=True)),
+            ("arXiv", lambda: arxiv(fetcher, moment, files, notes, live=True)),
+        ], notes)
+        snapshot_id = "live_" + moment.astimezone(EASTERN).strftime("%Y-%m-%d_%H%M")
         write_snapshot(args.out, snapshot_id, moment, files, notes, analysis)
-        for note in notes[len(window_notes):]:
-            print("   " + note, flush=True)
+        print(f"== {snapshot_id}\n   " + "\n   ".join(notes))
+        return
+
+    for day in args.days:
+        for clock in args.times:
+            moment = dt.datetime.combine(dt.date.fromisoformat(day), dt.time.fromisoformat(clock), tzinfo=EASTERN)
+            files, notes, analysis = {}, [], {}
+            notes.append("Memeorandum: switched off (no archive access)")
+            run_steps([
+                ("Hacker News", lambda: hn_history(fetcher, moment, files, notes)),
+                ("feeds", lambda: feeds(fetcher, moment, files, notes, live=False)),
+                ("bioRxiv", lambda: biorxiv(fetcher, moment, files, notes, analysis, live=False)),
+                ("arXiv", lambda: arxiv(fetcher, moment, files, notes, live=False)),
+            ], notes)
+            snapshot_id = "hist_" + moment.strftime("%Y-%m-%d_%H%M")
+            write_snapshot(args.out, snapshot_id, moment, files, notes, analysis, disabled=["Memeorandum"])
+            print(f"== {snapshot_id}\n   " + "\n   ".join(notes), flush=True)
 
 
 if __name__ == "__main__":
