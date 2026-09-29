@@ -29,9 +29,6 @@ python3 Tools/FeedLab/fairshare.py Tools/FeedLab/reports/current.md.lanes > Tool
 `run.sh` uses `swiftc` if installed, otherwise the official Swift image in
 Docker (`mirror.gcr.io/library/swift:6.2-noble`; set `SWIFT_IMAGE` to change).
 
-`selftest.py` checks the collector and replay against canned responses with no
-network: `python3 Tools/FeedLab/selftest.py --out Tools/FeedLab/build/selftest-data`
-then `run.sh --data Tools/FeedLab/build/selftest-data`.
 
 ## What a snapshot is
 
