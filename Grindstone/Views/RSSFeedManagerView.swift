@@ -1,59 +1,10 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct RSSLibrarySummaryCard: View {
-    let feedCount: Int
-    let enabledCount: Int
-    let actionTitle: String
-    let action: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Label("RSS Library", systemImage: "dot.radiowaves.left.and.right")
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-
-                    Text("Keep built-ins focused, then drop blogs, newsletters, and niche feeds here.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer(minLength: 0)
-
-                Button(actionTitle, action: action)
-                    .buttonStyle(.borderedProminent)
-                    .tint(.indigo)
-            }
-
-            HStack(spacing: 10) {
-                RSSLibraryStatPill(value: "\(feedCount)", label: "Total")
-                RSSLibraryStatPill(value: "\(enabledCount)", label: "Enabled")
-            }
-        }
-        .padding(18)
-        .background(
-            LinearGradient(
-                colors: [
-                    Color.indigo.opacity(0.16),
-                    Color.teal.opacity(0.10),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            ),
-            in: RoundedRectangle(cornerRadius: 22)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .strokeBorder(Color.indigo.opacity(0.15), lineWidth: 1)
-        )
-    }
-}
-
+/// The RSS library. Push it from Settings, or present `RSSFeedManagerSheet`
+/// from the feed.
 struct RSSFeedManagerView: View {
     @EnvironmentObject private var rssStore: ManualRSSFeedStore
-    @Environment(\.dismiss) private var dismiss
 
     @State private var draftTitle = ""
     @State private var draftURL = ""
@@ -61,73 +12,152 @@ struct RSSFeedManagerView: View {
     @State private var transferStatus: RSSLibraryTransferStatus?
     @State private var isShowingOPMLImporter = false
     @State private var isShowingOPMLExporter = false
-    @State private var exportDocument: RSSOPMLDocument?
+    @State private var pendingExport: RSSOPMLExport?
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    RSSLibrarySummaryCard(
-                        feedCount: rssStore.feeds.count,
-                        enabledCount: rssStore.enabledFeeds.count,
-                        actionTitle: "Done"
-                    ) {
-                        dismiss()
+        Form {
+            composerSection
+            feedsSection
+            backupSection
+        }
+        .formStyle(.grouped)
+        .readableMeasure(Theme.formWidth)
+        .paperBackground()
+        .navigationTitle("RSS Feeds")
+        .fileImporter(
+            isPresented: $isShowingOPMLImporter,
+            allowedContentTypes: [.opml, .xml]
+        ) { result in
+            importOPML(result)
+        }
+        .fileExporter(
+            isPresented: $isShowingOPMLExporter,
+            item: pendingExport,
+            contentTypes: [.opml],
+            defaultFilename: "grindstone-rss-library",
+            onCompletion: { result in
+                exportOPML(result)
+            },
+            onCancellation: {
+                pendingExport = nil
+            }
+        )
+    }
+
+    // MARK: Sections
+
+    private var composerSection: some View {
+        Section {
+            Group {
+                TextField("https://example.com/feed.xml", text: $draftURL)
+                    .autocorrectionDisabled()
+#if os(iOS)
+                    .textContentType(.URL)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+#endif
+                    .onSubmit(addFeed)
+
+                TextField("Name (optional)", text: $draftTitle)
+                    .onSubmit(addFeed)
+
+                if let composerErrorMessage {
+                    Text(composerErrorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+
+                Button("Add Feed", systemImage: "plus.circle.fill", action: addFeed)
+                    .disabled(draftURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            .raisedFormRow()
+        } header: {
+            SettingsHeader("Add a Feed")
+        } footer: {
+            SettingsFooter("Paste an RSS or Atom link. Leave the name blank to use the site's domain.")
+        }
+    }
+
+    private var feedsSection: some View {
+        Section {
+            if rssStore.feeds.isEmpty {
+                Text("No feeds yet. Add one above, or import an OPML file below.")
+                    .foregroundStyle(Theme.inkMuted)
+                    .raisedFormRow()
+            } else {
+                ForEach(rssStore.feeds) { feed in
+                    Toggle(isOn: enabledBinding(for: feed)) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(feed.title)
+                                .foregroundStyle(Theme.ink)
+                            Text(feed.displayHost)
+                                .font(.caption)
+                                .foregroundStyle(Theme.inkMuted)
+                        }
                     }
-
-                    RSSLibraryTransferCard(
-                        status: transferStatus,
-                        onImport: { isShowingOPMLImporter = true },
-                        onExport: prepareOPMLExport
-                    )
-
-                    RSSComposerCard(
-                        title: $draftTitle,
-                        urlString: $draftURL,
-                        errorMessage: composerErrorMessage,
-                        onAdd: addFeed
-                    )
-
-                    RSSFeedCollectionCard(
-                        feeds: rssStore.feeds,
-                        onToggle: { feed, isEnabled in
-                            rssStore.setEnabled(isEnabled, for: feed.id)
-                        },
-                        onDelete: { feed in
+                    .raisedFormRow()
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            rssStore.removeFeed(id: feed.id)
+                        } label: {
+                            Label("Remove", systemImage: "trash")
+                        }
+                    }
+                    .contextMenu {
+                        Button("Copy Feed Link", systemImage: "link") {
+                            if let url = feed.url {
+                                Pasteboard.copy(url)
+                            }
+                        }
+                        Button("Remove Feed", systemImage: "trash", role: .destructive) {
                             rssStore.removeFeed(id: feed.id)
                         }
-                    )
-                }
-                .padding()
-            }
-            .navigationTitle("RSS Feeds")
-            .modifier(RSSInlineNavigationTitleDisplayMode())
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") {
-                        dismiss()
                     }
                 }
             }
-            .fileImporter(
-                isPresented: $isShowingOPMLImporter,
-                allowedContentTypes: [.opml, .xml]
-            ) { result in
-                importOPML(result)
-            }
-            .fileExporter(
-                isPresented: $isShowingOPMLExporter,
-                document: exportDocument,
-                contentType: .opml,
-                defaultFilename: "grindstone-rss-library"
-            ) { result in
-                exportOPML(result)
+        } header: {
+            HStack {
+                SettingsHeader("Your Feeds")
+                Spacer()
+                if !rssStore.feeds.isEmpty {
+                    SettingsHeader("\(rssStore.enabledFeeds.count) of \(rssStore.feeds.count) on")
+                }
             }
         }
-#if os(iOS)
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
-#endif
+    }
+
+    private var backupSection: some View {
+        Section {
+            Group {
+                Button("Import OPML…", systemImage: "square.and.arrow.down") {
+                    transferStatus = nil
+                    isShowingOPMLImporter = true
+                }
+
+                Button("Export OPML…", systemImage: "square.and.arrow.up", action: prepareOPMLExport)
+                    .disabled(rssStore.feeds.isEmpty)
+
+                if let transferStatus {
+                    Text(transferStatus.message)
+                        .font(.footnote)
+                        .foregroundStyle(transferStatus.tone.color)
+                }
+            }
+            .raisedFormRow()
+        } header: {
+            SettingsHeader("Backup")
+        } footer: {
+            SettingsFooter("OPML is the standard format for moving a feed list between readers.")
+        }
+    }
+
+    // MARK: Actions
+
+    private func enabledBinding(for feed: ManualRSSFeed) -> Binding<Bool> {
+        Binding(
+            get: { feed.isEnabled },
+            set: { rssStore.setEnabled($0, for: feed.id) }
+        )
     }
 
     private func addFeed() {
@@ -143,7 +173,7 @@ struct RSSFeedManagerView: View {
 
     private func prepareOPMLExport() {
         transferStatus = nil
-        exportDocument = RSSOPMLDocument(text: rssStore.exportOPMLString())
+        pendingExport = RSSOPMLExport(text: rssStore.exportOPMLString())
         isShowingOPMLExporter = true
     }
 
@@ -152,32 +182,23 @@ struct RSSFeedManagerView: View {
             let fileURL = try result.get()
             let data = try readSecurityScopedData(from: fileURL)
             let importResult = try rssStore.importOPML(data: data)
-            transferStatus = RSSLibraryTransferStatus(
-                message: importResult.summary,
-                tone: .success
-            )
+            transferStatus = RSSLibraryTransferStatus(message: importResult.summary, tone: .success)
         } catch {
-            transferStatus = RSSLibraryTransferStatus(
-                message: error.localizedDescription,
-                tone: .error
-            )
+            transferStatus = RSSLibraryTransferStatus(message: error.localizedDescription, tone: .error)
         }
     }
 
     private func exportOPML(_ result: Result<URL, Error>) {
-        defer { exportDocument = nil }
+        defer { pendingExport = nil }
 
         do {
             let fileURL = try result.get()
             transferStatus = RSSLibraryTransferStatus(
-                message: "Exported OPML to \(fileURL.lastPathComponent).",
+                message: "Exported to \(fileURL.lastPathComponent).",
                 tone: .success
             )
         } catch {
-            transferStatus = RSSLibraryTransferStatus(
-                message: error.localizedDescription,
-                tone: .error
-            )
+            transferStatus = RSSLibraryTransferStatus(message: error.localizedDescription, tone: .error)
         }
     }
 
@@ -193,211 +214,23 @@ struct RSSFeedManagerView: View {
     }
 }
 
-private struct RSSComposerCard: View {
-    @Binding var title: String
-    @Binding var urlString: String
-    let errorMessage: String?
-    let onAdd: () -> Void
+/// Modal wrapper used from the feed's Options menu.
+struct RSSFeedManagerSheet: View {
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label("Add Feed", systemImage: "plus.circle.fill")
-                .font(.headline)
-
-            Text("Paste an RSS or Atom URL. A custom name is optional, but useful when the feed title is messy.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            VStack(spacing: 10) {
-                TextField("Display name (optional)", text: $title)
-                    .textFieldStyle(.roundedBorder)
-
-                TextField("https://example.com/feed.xml", text: $urlString)
-                    .textFieldStyle(.roundedBorder)
-#if os(iOS)
-                    .textInputAutocapitalization(.never)
-#endif
-                    .autocorrectionDisabled()
-            }
-
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-            }
-
-            Button(action: onAdd) {
-                Label("Add to RSS Library", systemImage: "plus")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.indigo)
-        }
-        .padding(18)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-        )
-    }
-}
-
-private struct RSSLibraryTransferCard: View {
-    let status: RSSLibraryTransferStatus?
-    let onImport: () -> Void
-    let onExport: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label("Import / Export", systemImage: "arrow.left.arrow.right.circle.fill")
-                .font(.headline)
-
-            Text("Bring an existing OPML library in, or export this setup as a backup you can move between readers.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 10) {
-                Button(action: onImport) {
-                    Label("Import OPML", systemImage: "square.and.arrow.down")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.indigo)
-
-                Button(action: onExport) {
-                    Label("Export OPML", systemImage: "square.and.arrow.up")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-            }
-
-            if let status {
-                Text(status.message)
-                    .font(.footnote)
-                    .foregroundStyle(status.tone.color)
-            }
-        }
-        .padding(18)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-        )
-    }
-}
-
-private struct RSSFeedCollectionCard: View {
-    let feeds: [ManualRSSFeed]
-    let onToggle: (ManualRSSFeed, Bool) -> Void
-    let onDelete: (ManualRSSFeed) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label("Your Feeds", systemImage: "tray.full.fill")
-                .font(.headline)
-
-            if feeds.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("No manual feeds yet.")
-                        .font(.subheadline.weight(.semibold))
-                    Text("Marginal Revolution normally lives here by default. Add more feeds whenever you want a custom lane.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
-            } else {
-                VStack(spacing: 12) {
-                    ForEach(feeds) { feed in
-                        RSSFeedRowCard(
-                            feed: feed,
-                            onToggle: { onToggle(feed, $0) },
-                            onDelete: { onDelete(feed) }
-                        )
+        NavigationStack {
+            RSSFeedManagerView()
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") {
+                            dismiss()
+                        }
                     }
                 }
-            }
         }
-        .padding(18)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-        )
-    }
-}
-
-private struct RSSFeedRowCard: View {
-    let feed: ManualRSSFeed
-    let onToggle: (Bool) -> Void
-    let onDelete: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "dot.radiowaves.left.and.right")
-                    .font(.title3)
-                    .foregroundStyle(feed.isEnabled ? .indigo : .secondary)
-                    .frame(width: 28)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(feed.title)
-                        .font(.subheadline.weight(.semibold))
-                    Text(feed.displayHost)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(feed.urlString)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .textSelection(.enabled)
-                }
-
-                Spacer(minLength: 0)
-
-                Button(role: .destructive, action: onDelete) {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.borderless)
-            }
-
-            Toggle(isOn: Binding(get: { feed.isEnabled }, set: onToggle)) {
-                Text(feed.isEnabled ? "Enabled" : "Disabled")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-            }
-            .toggleStyle(.switch)
-        }
-        .padding(14)
-        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
-    }
-}
-
-private struct RSSLibraryStatPill: View {
-    let value: String
-    let label: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(value)
-                .font(.headline)
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial, in: Capsule())
-    }
-}
-
-private struct RSSInlineNavigationTitleDisplayMode: ViewModifier {
-    func body(content: Content) -> some View {
-#if os(iOS)
-        content.navigationBarTitleDisplayMode(.inline)
-#else
-        content
+#if os(macOS)
+        .frame(minWidth: 480, minHeight: 540)
 #endif
     }
 }
@@ -414,9 +247,16 @@ private enum RSSLibraryTransferTone {
     var color: Color {
         switch self {
         case .success:
-            return .secondary
+            return Theme.inkMuted
         case .error:
             return .red
         }
     }
+}
+
+#Preview {
+    NavigationStack {
+        RSSFeedManagerView()
+    }
+    .previewEnvironment()
 }

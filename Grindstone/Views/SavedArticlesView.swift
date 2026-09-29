@@ -2,61 +2,96 @@ import SwiftUI
 
 struct SavedArticlesView: View {
     @EnvironmentObject private var feedUserState: FeedUserStateStore
-    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var preferences: FeedPreferences
+    @State private var isConfirmingRemoveAll = false
 
     var body: some View {
         NavigationStack {
             Group {
                 if feedUserState.savedItems.isEmpty {
-                    ContentUnavailableView(
-                        "No Saved Articles",
-                        systemImage: "bookmark",
-                        description: Text("Save stories from the feed to keep a short reading list here.")
+                    StoneEmptyState(
+                        "Nothing set aside",
+                        message: "Swipe right on a story, or press and hold it and choose Save for Later. It will keep here until you're ready."
                     )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List {
-                        ForEach(feedUserState.savedItems) { item in
-                            NavigationLink(value: item) {
-                                FeedItemRow(item: item)
+                        ForEach(Array(feedUserState.savedItems.enumerated()), id: \.element.id) { index, item in
+                            ArticleLink(destination: .article(item)) {
+                                FeedItemRow(item: item, showPreview: preferences.showPreviews)
                             }
-                            .swipeActions {
+                            .environment(\.storyPlacement, StoryPlacement(surface: .saved, position: index))
+                            .listRowInsets(EdgeInsets.storyRow)
+                            .paperListRow()
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button(role: .destructive) {
+                                    EngagementLog.shared.record(
+                                        .unsave,
+                                        item,
+                                        placement: StoryPlacement(surface: .saved, position: index)
+                                    )
                                     feedUserState.unsave(item)
                                 } label: {
                                     Label("Remove", systemImage: "bookmark.slash")
                                 }
                             }
+                            .swipeActions(edge: .leading) {
+                                ReadSwipeButton(item: item)
+                            }
                         }
                     }
                     .listStyle(.plain)
+                    .readableMeasure()
                 }
             }
+            .paperBackground()
             .navigationTitle("Saved")
-            .navigationDestination(for: FeedItem.self) { item in
-                DetailView(item: item)
-            }
+            .navigationSubtitle(subtitle)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") {
-                        dismiss()
+                if !feedUserState.savedItems.isEmpty {
+                    ToolbarItem(placement: .primaryAction) {
+                        Menu {
+                            Button("Mark All as Read", systemImage: "checkmark.circle") {
+                                EngagementLog.shared.recordMarkAllRead(feedUserState.savedItems, userState: feedUserState)
+                                feedUserState.markRead(feedUserState.savedItems)
+                            }
+                            .disabled(feedUserState.unreadCount(in: feedUserState.savedItems) == 0)
+
+                            Button("Remove All", systemImage: "trash", role: .destructive) {
+                                isConfirmingRemoveAll = true
+                            }
+                        } label: {
+                            Label("Options", systemImage: "ellipsis")
+                        }
                     }
                 }
             }
+            .confirmationDialog(
+                "Remove all saved stories?",
+                isPresented: $isConfirmingRemoveAll,
+                titleVisibility: .visible
+            ) {
+                Button("Remove All", role: .destructive) {
+                    feedUserState.clearSavedItems()
+                }
+            }
+            .navigationDestination(for: ArticleDestination.self) { destination in
+                DetailView(destination: destination)
+            }
         }
-#if os(iOS)
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
-#endif
+    }
+
+    private var subtitle: String {
+        let items = feedUserState.savedItems
+        guard !items.isEmpty else { return "" }
+
+        let unread = feedUserState.unreadCount(in: items)
+        let countText = items.count == 1 ? "1 story" : "\(items.count) stories"
+        return unread == 0 ? countText : "\(countText) · \(unread) unread"
     }
 }
 
 #Preview {
     SavedArticlesView()
-        .environmentObject({
-            let defaults = UserDefaults(suiteName: "SavedArticlesViewPreview")!
-            let store = FeedUserStateStore(defaults: defaults)
-            store.save(FeedItem.mock[0])
-            store.save(FeedItem.mock[1])
-            return store
-        }())
+        .previewEnvironment()
 }

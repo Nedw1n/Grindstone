@@ -6,34 +6,107 @@ struct FeedItem: Identifiable, Hashable, Codable, Sendable {
     let url: URL
     let outlet: String?
     let source: Source
-    let publishedAt: Date
+    var publishedAt: Date
     let commentCount: Int?
     let points: Int?
     let snippet: String?
     var intraSourceRank: Double
     var crossRefs: [Source]
+    /// Where the conversation about this story lives (Hacker News thread,
+    /// Memeorandum cluster, blog comments). `nil` when the source has none.
+    var discussionURL: URL? = nil
+    /// Other articles the source groups with this one as the same story
+    /// (Memeorandum lists every outlet covering a story). Used only to spot
+    /// the story on other sources.
+    var relatedURLs: [URL] = []
+    /// `true` when the feed gave no usable date. `publishedAt` is then when
+    /// Grindstone first saw the story, carried across refreshes by
+    /// `FeedViewModel` so the story ages instead of looking brand new each time.
+    var isUndated: Bool = false
+    /// The feed within its source this story came from ("hn", "stat",
+    /// "rss:<feed id>"). Today takes turns between a source's channels, so a
+    /// busy feed can't crowd out a quiet one. Empty means the source itself.
+    var channel: String = ""
+    /// `true` when the channel publishes its own order (a ranked front page),
+    /// `false` when it just lists the newest first.
+    var isRanked: Bool = false
 
-    /// URL normalized for cross-reference matching.
-    /// Strips tracking parameters, trailing slashes, and lowercases the host.
+    /// The channel, falling back to the source for items that don't name one.
+    var channelKey: String {
+        channel.isEmpty ? source.rawValue : channel
+    }
+
+    /// The link reduced to what identifies the article, for matching the same
+    /// story across sources. See `FeedItem.storyKey(for:)`.
     var normalizedURL: String {
-        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            return url.absoluteString
+        FeedItem.storyKey(for: url)
+    }
+
+    /// Reduces a link to what identifies the article: no scheme, no `www.`,
+    /// mobile, or AMP variants, no fragment, no trailing slash or index page,
+    /// and no tracking parameters. The remaining query is sorted, so parameter
+    /// order doesn't matter.
+    static func storyKey(for url: URL) -> String {
+        guard
+            let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+            var host = components.host?.lowercased()
+        else {
+            return url.absoluteString.lowercased()
         }
-        components.scheme = components.scheme?.lowercased()
-        components.host = components.host?.lowercased()
-        components.queryItems = components.queryItems?
-            .filter { item in
-                let name = item.name.lowercased()
-                return !name.hasPrefix("utm_") && name != "ref" && name != "source"
-            }
-        if components.queryItems?.isEmpty == true {
-            components.queryItems = nil
+
+        for prefix in ["www.", "m.", "mobile.", "amp."] where host.hasPrefix(prefix) {
+            host.removeFirst(prefix.count)
+            break
         }
-        var result = components.string ?? url.absoluteString
-        while result.hasSuffix("/") {
-            result.removeLast()
+
+        var path = components.path
+        if path.lowercased().hasPrefix("/amp/") {
+            path.removeFirst(4)
         }
-        return result
+        for suffix in ["/amp", ".amp", "/index.html", "/index.htm", "/index.php"]
+        where path.lowercased().hasSuffix(suffix) {
+            path.removeLast(suffix.count)
+            break
+        }
+        while path.hasSuffix("/") {
+            path.removeLast()
+        }
+
+        let query = (components.queryItems ?? [])
+            .filter { !isTrackingParameter($0.name) }
+            .sorted { $0.name < $1.name }
+            .map { "\($0.name)=\($0.value ?? "")" }
+
+        return query.isEmpty ? host + path : host + path + "?" + query.joined(separator: "&")
+    }
+
+    private static let trackingParameters: Set<String> = [
+        "ref", "source", "fbclid", "gclid", "dclid", "msclkid", "mc_cid", "mc_eid",
+        "ocid", "cmpid", "smid", "smtyp", "sref", "igshid", "_ga", "_gl", "spm",
+        "share", "via", "rss", "outputtype", "at_medium", "at_campaign", "ito", "s_cid",
+        // Gift and unlocked-article links (New York Times, Washington Post).
+        "unlocked_article_code", "pwapi_token", "gift", "giftcopy",
+    ]
+
+    private static func isTrackingParameter(_ name: String) -> Bool {
+        let name = name.lowercased()
+        return name.hasPrefix("utm_") || trackingParameters.contains(name)
+    }
+
+    /// The outlet name when the source supplied one, otherwise the article's host
+    /// (e.g. "github.com"). Hacker News items never carry an outlet, so this keeps
+    /// every row labelled with where the link actually goes.
+    var displayOutlet: String? {
+        if let outlet, !outlet.isEmpty {
+            return outlet
+        }
+        guard let host = url.host?.lowercased() else { return nil }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+
+    /// Cross-references in the app's canonical source order, so badges never shuffle.
+    var orderedCrossRefs: [Source] {
+        Source.allCases.filter { crossRefs.contains($0) }
     }
 
     static func == (lhs: FeedItem, rhs: FeedItem) -> Bool {
@@ -61,7 +134,8 @@ extension FeedItem {
             points: 340,
             snippet: "NVIDIA, AMD, and a wave of startups are competing for dominance in the AI accelerator market.",
             intraSourceRank: 1.0,
-            crossRefs: [.memo]
+            crossRefs: [.memo],
+            discussionURL: URL(string: "https://news.ycombinator.com/item?id=1")
         ),
         FeedItem(
             id: "https://example.com/fed-rate-hold",
@@ -90,9 +164,9 @@ extension FeedItem {
             crossRefs: []
         ),
         FeedItem(
-            id: "https://example.com/rust-linux-kernel",
+            id: "https://github.com/rust-for-linux/linux",
             title: "Rust in the Linux Kernel: Year Two",
-            url: URL(string: "https://example.com/rust-linux-kernel")!,
+            url: URL(string: "https://github.com/rust-for-linux/linux")!,
             outlet: nil,
             source: .hn,
             publishedAt: Date().addingTimeInterval(-14400),
@@ -100,7 +174,8 @@ extension FeedItem {
             points: 512,
             snippet: nil,
             intraSourceRank: 0.61,
-            crossRefs: []
+            crossRefs: [],
+            discussionURL: URL(string: "https://news.ycombinator.com/item?id=2")
         ),
         FeedItem(
             id: "https://example.com/biotech-crispr-trial",
@@ -131,22 +206,36 @@ extension FeedItem {
         case snippet
         case intraSourceRank
         case crossRefs
+        case discussionURL
+        case relatedURLs
+        case isUndated
+        case channel
+        case isRanked
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let source = try container.decode(Source.self, forKey: .source)
+        // Items cached before channels carried their kind came from Hacker News
+        // and Memeorandum's ranked pages, or from newest-first feeds.
+        let wasRanked = source == .hn || source == .memo
         self = FeedItem(
             id: try container.decode(String.self, forKey: .id),
             title: try container.decode(String.self, forKey: .title),
             url: try container.decode(URL.self, forKey: .url),
             outlet: try container.decodeIfPresent(String.self, forKey: .outlet),
-            source: try container.decode(Source.self, forKey: .source),
+            source: source,
             publishedAt: try container.decode(Date.self, forKey: .publishedAt),
             commentCount: try container.decodeIfPresent(Int.self, forKey: .commentCount),
             points: try container.decodeIfPresent(Int.self, forKey: .points),
             snippet: try container.decodeIfPresent(String.self, forKey: .snippet),
             intraSourceRank: try container.decodeIfPresent(Double.self, forKey: .intraSourceRank) ?? 0,
-            crossRefs: try container.decodeIfPresent([Source].self, forKey: .crossRefs) ?? []
+            crossRefs: try container.decodeIfPresent([Source].self, forKey: .crossRefs) ?? [],
+            discussionURL: try container.decodeIfPresent(URL.self, forKey: .discussionURL),
+            relatedURLs: try container.decodeIfPresent([URL].self, forKey: .relatedURLs) ?? [],
+            isUndated: try container.decodeIfPresent(Bool.self, forKey: .isUndated) ?? false,
+            channel: try container.decodeIfPresent(String.self, forKey: .channel) ?? "",
+            isRanked: try container.decodeIfPresent(Bool.self, forKey: .isRanked) ?? wasRanked
         )
     }
 }

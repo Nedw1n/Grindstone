@@ -33,7 +33,9 @@ enum RSSService {
 }
 
 enum ManualRSSService {
-    static func fetch(feeds: [ManualRSSFeed], limit: Int = 32) async throws -> [FeedItem] {
+    /// Each feed contributes at most `perFeedLimit` of its newest stories, so a
+    /// busy feed can't push a quiet one out of the lane.
+    static func fetch(feeds: [ManualRSSFeed], perFeedLimit: Int = 12) async throws -> [FeedItem] {
         let enabledFeeds = feeds.filter(\.isEnabled)
         guard !enabledFeeds.isEmpty else { return [] }
 
@@ -43,7 +45,7 @@ enum ManualRSSService {
         ) { group in
             for feed in enabledFeeds {
                 group.addTask {
-                    await load(feed: feed)
+                    await load(feed: feed, limit: perFeedLimit)
                 }
             }
 
@@ -65,10 +67,10 @@ enum ManualRSSService {
             throw FeedFetchError.emptyResponse(source: Source.rss.rawValue)
         }
 
-        return Array(rankedItems.prefix(limit))
+        return rankedItems
     }
 
-    private static func load(feed: ManualRSSFeed) async -> ManualRSSLoadResult {
+    private static func load(feed: ManualRSSFeed, limit: Int) async -> ManualRSSLoadResult {
         guard let url = feed.url else {
             return ManualRSSLoadResult(
                 items: [],
@@ -77,7 +79,10 @@ enum ManualRSSService {
         }
 
         do {
-            let items = try await RSSService.fetch(url: url, source: .rss).map { item in
+            let newest = try await RSSService.fetch(url: url, source: .rss)
+                .sorted { $0.publishedAt > $1.publishedAt }
+                .prefix(limit)
+            let items = newest.map { item in
                 FeedItem(
                     id: item.id,
                     title: item.title,
@@ -89,11 +94,14 @@ enum ManualRSSService {
                     points: item.points,
                     snippet: item.snippet,
                     intraSourceRank: item.intraSourceRank,
-                    crossRefs: []
+                    crossRefs: [],
+                    discussionURL: item.discussionURL,
+                    isUndated: item.isUndated,
+                    channel: "rss:\(feed.id.uuidString)"
                 )
             }
 
-            return ManualRSSLoadResult(items: items, errorMessage: nil)
+            return ManualRSSLoadResult(items: Array(items), errorMessage: nil)
         } catch is CancellationError {
             return ManualRSSLoadResult(items: [], errorMessage: nil)
         } catch {
@@ -128,7 +136,9 @@ final class RSSParser: NSObject, XMLParserDelegate {
     private var currentTitle = ""
     private var currentLink = ""
     private var currentDate = ""
-    private var currentSnippet = ""
+    private var currentSummary = ""
+    private var currentContent = ""
+    private var currentComments = ""
     private var isInsideItem = false
 
     // Tag names that delimit an item vary between RSS and Atom
@@ -136,7 +146,10 @@ final class RSSParser: NSObject, XMLParserDelegate {
     private let titleTags: Set<String> = ["title"]
     private let linkTags: Set<String> = ["link"]
     private let dateTags: Set<String> = ["pubDate", "published", "updated", "dc:date"]
-    private let snippetTags: Set<String> = ["description", "summary", "content"]
+    private let summaryTags: Set<String> = ["description", "summary"]
+    /// Atom's full post body, used for the snippet only when there is no summary.
+    private let contentTags: Set<String> = ["content"]
+    private let commentsTags: Set<String> = ["comments"]
 
     init(source: Source) {
         self.source = source
@@ -161,11 +174,17 @@ final class RSSParser: NSObject, XMLParserDelegate {
             currentTitle = ""
             currentLink = ""
             currentDate = ""
-            currentSnippet = ""
+            currentSummary = ""
+            currentContent = ""
+            currentComments = ""
         }
 
-        // Atom uses <link href="..."/> as a self-closing tag
-        if element == "link", isInsideItem, let href = attributes["href"] {
+        // Atom uses self-closing <link href="..."/> tags, often several per
+        // entry (the comments feed, an edit link). The article is the first one
+        // marked rel="alternate", or with no rel at all.
+        if element == "link", isInsideItem, let href = attributes["href"],
+           (attributes["rel"] ?? "alternate") == "alternate",
+           currentLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             currentLink = href
         }
     }
@@ -179,9 +198,20 @@ final class RSSParser: NSObject, XMLParserDelegate {
             currentLink += string
         } else if dateTags.contains(currentElement) {
             currentDate += string
-        } else if snippetTags.contains(currentElement) {
-            currentSnippet += string
+        } else if summaryTags.contains(currentElement) {
+            currentSummary += string
+        } else if contentTags.contains(currentElement) {
+            currentContent += string
+        } else if commentsTags.contains(currentElement) {
+            currentComments += string
         }
+    }
+
+    /// Text wrapped in <![CDATA[...]]> arrives here rather than in
+    /// `foundCharacters`. Many feeds wrap titles and descriptions this way.
+    func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
+        guard let string = String(data: CDATABlock, encoding: .utf8) else { return }
+        self.parser(parser, foundCharacters: string)
     }
 
     func parser(_ parser: XMLParser, didEndElement element: String,
@@ -189,14 +219,24 @@ final class RSSParser: NSObject, XMLParserDelegate {
         guard itemTags.contains(element), isInsideItem else { return }
 
         isInsideItem = false
-        let title = currentTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = currentTitle
+            .strippingHTML()
+            .decodingHTMLEntities()
+            .condensedWhitespace()
         let link = currentLink.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !title.isEmpty, let url = URL(string: link) else { return }
 
+        // `nil` when the feed gives no usable date. The story is then stamped
+        // with the fetch time, and `FeedViewModel` keeps the first stamp.
         let date = Self.parseDate(currentDate.trimmingCharacters(in: .whitespacesAndNewlines))
-        let snippet = currentSnippet.trimmingCharacters(in: .whitespacesAndNewlines)
+        let summary = currentSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let snippet = (summary.isEmpty ? currentContent : summary)
             .strippingHTML()
+            .decodingHTMLEntities()
+            .condensedWhitespace()
+        let commentsLink = currentComments.trimmingCharacters(in: .whitespacesAndNewlines)
+        let discussionURL = commentsLink.isEmpty ? nil : URL(string: commentsLink)
 
         items.append(FeedItem(
             id: url.absoluteString,
@@ -204,12 +244,14 @@ final class RSSParser: NSObject, XMLParserDelegate {
             url: url,
             outlet: nil,
             source: source,
-            publishedAt: date,
+            publishedAt: date ?? Date(),
             commentCount: nil,
             points: nil,
             snippet: snippet.isEmpty ? nil : String(snippet.prefix(280)),
             intraSourceRank: 0,
-            crossRefs: []
+            crossRefs: [],
+            discussionURL: discussionURL,
+            isUndated: date == nil
         ))
     }
 
@@ -232,12 +274,13 @@ final class RSSParser: NSObject, XMLParserDelegate {
         }
     }()
 
-    private static func parseDate(_ string: String) -> Date {
+    private static func parseDate(_ string: String) -> Date? {
+        guard !string.isEmpty else { return nil }
         for formatter in dateFormatters {
             if let date = formatter.date(from: string) {
                 return date
             }
         }
-        return Date()
+        return nil
     }
 }

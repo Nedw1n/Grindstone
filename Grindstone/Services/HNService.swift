@@ -107,6 +107,7 @@ private struct HNItem: Decodable {
 
         // HN stories sometimes lack a URL (Ask HN, Show HN text posts).
         // Fall back to the HN item page itself.
+        let discussionURL = URL(string: "https://news.ycombinator.com/item?id=\(id)")
         let itemURLString = url ?? "https://news.ycombinator.com/item?id=\(id)"
         guard let itemURL = URL(string: itemURLString) else { return nil }
 
@@ -123,7 +124,10 @@ private struct HNItem: Decodable {
             points: score,
             snippet: nil,
             intraSourceRank: 0,
-            crossRefs: []
+            crossRefs: [],
+            discussionURL: discussionURL,
+            channel: "hn",
+            isRanked: true
         )
     }
 }

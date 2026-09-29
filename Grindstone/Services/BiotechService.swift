@@ -16,7 +16,9 @@ enum BiotechService {
         },
     ]
 
-    static func fetch(limit: Int = 24) async throws -> [FeedItem] {
+    /// Every provider's stories, newest first. Each provider keeps its own
+    /// limit and channel, so none can push the others out of the lane.
+    static func fetch() async throws -> [FeedItem] {
         let results = await withTaskGroup(
             of: BiotechProviderResult.self,
             returning: [BiotechProviderResult].self
@@ -45,7 +47,7 @@ enum BiotechService {
             throw FeedFetchError.emptyResponse(source: Source.biotech.rawValue)
         }
 
-        return Array(rankedItems.prefix(limit))
+        return rankedItems
     }
 
     private static func loadProvider(
@@ -82,24 +84,37 @@ private struct BiotechProviderError: LocalizedError, Sendable {
 }
 
 private enum NatureBiotechService {
-    private static let feedURL = URL(string: "https://www.nature.com/subjects/biotechnology.rss")!
+    /// The journal's own feed. The biotechnology subject feed mixes in every
+    /// Nature Portfolio title, mostly Scientific Reports.
+    private static let feedURL = URL(string: "https://www.nature.com/nbt.rss")!
+    /// Notices about earlier papers, not stories in their own right.
+    private static let noticePrefixes = [
+        "author correction", "publisher correction", "correction", "retraction",
+        "editorial expression of concern",
+    ]
 
     static func fetch(limit: Int) async throws -> [FeedItem] {
         let items = try await RSSService.fetch(url: feedURL, source: .biotech)
+            .filter { item in
+                let title = item.title.lowercased()
+                return !noticePrefixes.contains { title.hasPrefix($0 + ":") }
+            }
 
         return Array(items.prefix(limit)).map { item in
             FeedItem(
                 id: item.id,
                 title: item.title,
                 url: item.url,
-                outlet: "Nature",
+                outlet: "Nature Biotechnology",
                 source: .biotech,
                 publishedAt: item.publishedAt,
                 commentCount: nil,
                 points: nil,
                 snippet: item.snippet,
                 intraSourceRank: item.intraSourceRank,
-                crossRefs: []
+                crossRefs: [],
+                isUndated: item.isUndated,
+                channel: "nature"
             )
         }
     }
@@ -148,18 +163,22 @@ private enum StatNewsBiotechService {
             .filter(isRelevant)
             .prefix(limit)
             .map { item in
-                FeedItem(
+                // Subscriber-only stories keep their mark as the outlet, so the
+                // title stays clean but the paywall is still visible.
+                let isSubscriberOnly = item.title.hasPrefix("STAT+: ")
+                return FeedItem(
                     id: item.url.absoluteString,
-                    title: item.title.replacingOccurrences(of: "STAT+: ", with: ""),
+                    title: isSubscriberOnly ? String(item.title.dropFirst("STAT+: ".count)) : item.title,
                     url: item.url,
-                    outlet: "STAT",
+                    outlet: isSubscriberOnly ? "STAT+" : "STAT",
                     source: .biotech,
                     publishedAt: item.publishedAt,
                     commentCount: nil,
                     points: nil,
                     snippet: item.snippet,
                     intraSourceRank: 0,
-                    crossRefs: []
+                    crossRefs: [],
+                    channel: "stat"
                 )
             }
         let rankedItems = FeedRankingEngine.assignIntraSourceRanks(to: Array(items))
@@ -177,8 +196,8 @@ private enum StatNewsBiotechService {
             return true
         }
 
-        let haystack = "\(item.title) \(item.snippet ?? "")".lowercased()
-        return textKeywords.contains { haystack.contains($0) }
+        let haystack = "\(item.title) \(item.snippet ?? "")"
+        return textKeywords.contains { haystack.containsWord($0) }
     }
 }
 
@@ -249,8 +268,38 @@ private enum BioRxivService {
         startDate: String,
         endDate: String
     ) async throws -> [FeedItem] {
+        // The API lists the window oldest first, a page at a time. The first
+        // page gives the total; the last page holds the newest preprints.
+        let first = try await fetchPage(category, startDate: startDate, endDate: endDate, cursor: 0)
+        var records = first.collection
+        if let total = first.total, total > records.count, !records.isEmpty {
+            let newest = try await fetchPage(
+                category, startDate: startDate, endDate: endDate, cursor: total - records.count
+            )
+            if !newest.collection.isEmpty {
+                records = newest.collection
+            }
+        }
+
+        let items = records.compactMap { record in
+            record.toFeedItem()
+        }
+
+        guard !items.isEmpty else {
+            throw FeedFetchError.emptyResponse(source: Source.biotech.rawValue)
+        }
+
+        return items
+    }
+
+    private static func fetchPage(
+        _ category: String,
+        startDate: String,
+        endDate: String,
+        cursor: Int
+    ) async throws -> BioRxivResponse {
         var components = URLComponents(
-            string: "https://api.biorxiv.org/details/biorxiv/\(startDate)/\(endDate)/0/json"
+            string: "https://api.biorxiv.org/details/biorxiv/\(startDate)/\(endDate)/\(cursor)/json"
         )!
         components.queryItems = [
             URLQueryItem(name: "category", value: category),
@@ -264,16 +313,7 @@ private enum BioRxivService {
             throw FeedFetchError.badStatus(source: Source.biotech.rawValue, statusCode: statusCode)
         }
 
-        let decoded = try JSONDecoder().decode(BioRxivResponse.self, from: data)
-        let items = decoded.collection.compactMap { record in
-            record.toFeedItem()
-        }
-
-        guard !items.isEmpty else {
-            throw FeedFetchError.emptyResponse(source: Source.biotech.rawValue)
-        }
-
-        return items
+        return try JSONDecoder().decode(BioRxivResponse.self, from: data)
     }
 
     private static func recentDateRange(daysBack: Int) -> (start: String, end: String) {
@@ -369,8 +409,9 @@ private enum ArXivBiotechService {
         }
 
         if loweredCategories.contains("cs.lg") || loweredCategories.contains("stat.ml") {
-            let haystack = "\(item.feedItem.title) \(item.feedItem.snippet ?? "")".lowercased()
-            return bioKeywords.contains { haystack.contains($0) }
+            // Whole words only: "gene" must not match "generative" or "general".
+            let haystack = "\(item.feedItem.title) \(item.feedItem.snippet ?? "")"
+            return bioKeywords.contains { haystack.containsWord($0) }
         }
 
         return false
@@ -378,7 +419,31 @@ private enum ArXivBiotechService {
 }
 
 private struct BioRxivResponse: Decodable {
+    let messages: [BioRxivMessage]?
     let collection: [BioRxivRecord]
+
+    /// Records in the whole window, across every page.
+    var total: Int? { messages?.first?.total }
+}
+
+private struct BioRxivMessage: Decodable {
+    let total: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case total
+    }
+
+    init(from decoder: Decoder) throws {
+        // The API sends the total as a string ("65"); accept a number too.
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let number = try? container.decode(Int.self, forKey: .total) {
+            total = number
+        } else if let text = try? container.decode(String.self, forKey: .total) {
+            total = Int(text)
+        } else {
+            total = nil
+        }
+    }
 }
 
 private struct BioRxivRecord: Decodable {
@@ -415,7 +480,8 @@ private struct BioRxivRecord: Decodable {
             points: nil,
             snippet: snippet?.isEmpty == true ? nil : String((snippet ?? "").prefix(280)),
             intraSourceRank: 0,
-            crossRefs: []
+            crossRefs: [],
+            channel: "biorxiv"
         )
     }
 }
@@ -541,7 +607,8 @@ private final class ArXivAtomParser: NSObject, XMLParserDelegate {
                     points: nil,
                     snippet: summary.isEmpty ? nil : String(summary.prefix(280)),
                     intraSourceRank: 0,
-                    crossRefs: []
+                    crossRefs: [],
+                    channel: "arxiv"
                 ),
                 categories: currentCategories
             )
@@ -618,6 +685,13 @@ private final class StatNewsRSSParser: NSObject, XMLParserDelegate {
         default:
             break
         }
+    }
+
+    /// STAT's WordPress feed wraps descriptions and categories in CDATA, which
+    /// arrives here rather than in `foundCharacters`.
+    func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
+        guard let string = String(data: CDATABlock, encoding: .utf8) else { return }
+        self.parser(parser, foundCharacters: string)
     }
 
     func parser(

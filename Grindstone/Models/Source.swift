@@ -8,7 +8,9 @@ enum Source: String, CaseIterable, Identifiable, Hashable, Codable, Sendable {
     case biotech = "Biotech"
     case rss = "RSS"
 
-    static let featuredSources: [Source] = [.hn, .memo, .biotech]
+    /// Sources with a fixed upstream that the user can switch on or off in Settings.
+    /// RSS is always present because the user curates it feed by feed.
+    static let builtInSources: [Source] = [.hn, .memo, .biotech]
 
     var id: String { rawValue }
 
@@ -21,12 +23,24 @@ enum Source: String, CaseIterable, Identifiable, Hashable, Codable, Sendable {
         }
     }
 
+    /// One-line description shown under the source name in Settings.
+    var summary: String {
+        switch self {
+        case .hn: return "Front page stories, ranked as on the site"
+        case .memo: return "Top political and media stories of the moment"
+        case .biotech: return "bioRxiv, arXiv q-bio, STAT, and Nature Biotechnology"
+        case .rss: return "Blogs and publications you add yourself"
+        }
+    }
+
+    /// A muted mineral tint (rust, slate, verdigris, heather) that sits with the
+    /// stone palette. Sources are told apart by name first; color only backs it up.
     var color: Color {
         switch self {
-        case .hn: return .orange
-        case .memo: return .blue
-        case .biotech: return .teal
-        case .rss: return .indigo
+        case .hn: return Color("SourceHN")
+        case .memo: return Color("SourceMemo")
+        case .biotech: return Color("SourceBio")
+        case .rss: return Color("SourceRSS")
         }
     }
 
