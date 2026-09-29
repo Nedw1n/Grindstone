@@ -11,6 +11,7 @@ enum AppTab: Hashable {
 struct RootView: View {
     @EnvironmentObject private var session: ReadingSessionStore
     @EnvironmentObject private var engagement: EngagementLog
+    @EnvironmentObject private var vm: FeedViewModel
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab: AppTab = .feed
 
@@ -43,6 +44,7 @@ struct RootView: View {
                 if session.beginVisit() {
                     engagement.beginVisit()
                 }
+                Task { await vm.refreshIfStale() }
             case .inactive, .background:
                 session.endVisit()
                 engagement.flush()

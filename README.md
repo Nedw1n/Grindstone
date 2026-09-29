@@ -90,4 +90,5 @@ does not affect ranking yet.
 | UI | `RootView` tab layout, `FeedView`, `FilterBar`, `StoneStack`, `FeedItemRow`, `StoryParts`, `SettingsView`, `RSSFeedManagerView`, `SearchView`, `SavedArticlesView` |
 
 Feeds are cached to Application Support so the app opens with the last
-snapshot before refreshing. Requires iOS 26 / macOS 26.
+snapshot before refreshing. Coming back to the app refreshes again once the
+feed is more than 15 minutes old. Requires iOS 26 / macOS 26.

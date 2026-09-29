@@ -62,6 +62,18 @@ final class FeedViewModel: ObservableObject {
         await refresh()
     }
 
+    /// Refreshes when the app comes back to the foreground and the last
+    /// refresh is older than `staleInterval`. Launch has its own refresh.
+    func refreshIfStale(now: Date = Date()) async {
+        guard hasPerformedInitialRefresh else { return }
+        if let lastUpdatedAt, now.timeIntervalSince(lastUpdatedAt) < Self.staleInterval {
+            return
+        }
+        await refresh()
+    }
+
+    private static let staleInterval: TimeInterval = 15 * 60
+
     // MARK: Derived collections
 
     /// Sources that currently appear in filters, in canonical order.
