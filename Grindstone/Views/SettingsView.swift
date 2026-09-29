@@ -145,7 +145,7 @@ struct SettingsView: View {
                 Button("Clear Read History", systemImage: "arrow.counterclockwise", role: .destructive) {
                     isConfirmingClearRead = true
                 }
-                .disabled(feedUserState.readItemIDs.isEmpty)
+                .disabled(feedUserState.readDates.isEmpty)
 
                 Button("Remove All Saved Stories", systemImage: "bookmark.slash", role: .destructive) {
                     isConfirmingClearSaved = true

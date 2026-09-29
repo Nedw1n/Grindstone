@@ -56,7 +56,9 @@ struct FeedView: View {
                 now = date
             }
             .onChange(of: vm.searchCorpus.map(\.id), initial: true) { _, _ in
-                session.recordArrivals(vm.searchCorpus)
+                let corpus = vm.searchCorpus
+                session.recordArrivals(corpus)
+                feedUserState.renewReadMarks(for: corpus)
             }
             .confirmationDialog(
                 markAllReadTitle,
