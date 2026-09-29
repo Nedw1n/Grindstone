@@ -214,7 +214,11 @@ final class FeedViewModel: ObservableObject {
 
         for result in results {
             if result.wasSuccessful {
-                updated[result.source] = result.items
+                updated[result.source] = Self.keepingFirstSeenDates(
+                    in: result.items,
+                    previous: previousSourceItems[result.source] ?? [],
+                    source: result.source
+                )
             } else {
                 updated[result.source] = updated[result.source] ?? []
             }
@@ -227,6 +231,35 @@ final class FeedViewModel: ObservableObject {
         }
 
         return updated
+    }
+
+    /// Stories whose feed gives no date are stamped with the time they were
+    /// fetched. Keeps the stamp from the first fetch, so they age like any
+    /// other story instead of looking brand new on every refresh.
+    private static func keepingFirstSeenDates(
+        in items: [FeedItem],
+        previous: [FeedItem],
+        source: Source
+    ) -> [FeedItem] {
+        guard items.contains(where: \.isUndated) else { return items }
+
+        let firstSeen = Dictionary(
+            previous.filter(\.isUndated).map { ($0.id, $0.publishedAt) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let restamped = items.map { item -> FeedItem in
+            guard item.isUndated, let firstSeenAt = firstSeen[item.id] else { return item }
+            var copy = item
+            copy.publishedAt = firstSeenAt
+            return copy
+        }
+
+        // Date-ordered sources list the newest first, so restamped stories go
+        // back to their place by age.
+        guard !source.hasEditorialOrder else { return restamped }
+        return FeedRankingEngine.assignIntraSourceRanks(
+            to: restamped.sorted { $0.publishedAt > $1.publishedAt }
+        )
     }
 
     /// Builds the merged front page. Stories are matched across the whole of

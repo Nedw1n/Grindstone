@@ -211,6 +211,8 @@ private struct MemoHomepageItem {
     func makeFeedItem(metadata: FeedItem?) -> FeedItem {
         let resolvedSnippet = snippet
             ?? metadata?.snippet?.cleanedMemoSnippet(title: title, outlet: outlet ?? metadata?.outlet)
+        // An undated feed entry only carries the fetch time; the permalink's day is closer.
+        let publishedAt = metadata.flatMap { $0.isUndated ? nil : $0.publishedAt } ?? fallbackDate
 
         return FeedItem(
             id: articleURL.absoluteString,
@@ -218,7 +220,7 @@ private struct MemoHomepageItem {
             url: articleURL,
             outlet: outlet ?? metadata?.outlet,
             source: .memo,
-            publishedAt: metadata?.publishedAt ?? fallbackDate,
+            publishedAt: publishedAt,
             commentCount: nil,
             points: nil,
             snippet: resolvedSnippet,

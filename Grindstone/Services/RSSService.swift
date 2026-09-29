@@ -90,7 +90,8 @@ enum ManualRSSService {
                     snippet: item.snippet,
                     intraSourceRank: item.intraSourceRank,
                     crossRefs: [],
-                    discussionURL: item.discussionURL
+                    discussionURL: item.discussionURL,
+                    isUndated: item.isUndated
                 )
             }
 
@@ -220,6 +221,8 @@ final class RSSParser: NSObject, XMLParserDelegate {
 
         guard !title.isEmpty, let url = URL(string: link) else { return }
 
+        // `nil` when the feed gives no usable date. The story is then stamped
+        // with the fetch time, and `FeedViewModel` keeps the first stamp.
         let date = Self.parseDate(currentDate.trimmingCharacters(in: .whitespacesAndNewlines))
         let summary = currentSummary.trimmingCharacters(in: .whitespacesAndNewlines)
         let snippet = (summary.isEmpty ? currentContent : summary)
@@ -235,13 +238,14 @@ final class RSSParser: NSObject, XMLParserDelegate {
             url: url,
             outlet: nil,
             source: source,
-            publishedAt: date,
+            publishedAt: date ?? Date(),
             commentCount: nil,
             points: nil,
             snippet: snippet.isEmpty ? nil : String(snippet.prefix(280)),
             intraSourceRank: 0,
             crossRefs: [],
-            discussionURL: discussionURL
+            discussionURL: discussionURL,
+            isUndated: date == nil
         ))
     }
 
@@ -264,12 +268,13 @@ final class RSSParser: NSObject, XMLParserDelegate {
         }
     }()
 
-    private static func parseDate(_ string: String) -> Date {
+    private static func parseDate(_ string: String) -> Date? {
+        guard !string.isEmpty else { return nil }
         for formatter in dateFormatters {
             if let date = formatter.date(from: string) {
                 return date
             }
         }
-        return Date()
+        return nil
     }
 }

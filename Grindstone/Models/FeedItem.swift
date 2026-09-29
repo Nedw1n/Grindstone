@@ -6,7 +6,7 @@ struct FeedItem: Identifiable, Hashable, Codable, Sendable {
     let url: URL
     let outlet: String?
     let source: Source
-    let publishedAt: Date
+    var publishedAt: Date
     let commentCount: Int?
     let points: Int?
     let snippet: String?
@@ -19,6 +19,10 @@ struct FeedItem: Identifiable, Hashable, Codable, Sendable {
     /// (Memeorandum lists every outlet covering a story). Used only to spot
     /// the story on other sources.
     var relatedURLs: [URL] = []
+    /// `true` when the feed gave no usable date. `publishedAt` is then when
+    /// Grindstone first saw the story, carried across refreshes by
+    /// `FeedViewModel` so the story ages instead of looking brand new each time.
+    var isUndated: Bool = false
 
     /// The link reduced to what identifies the article, for matching the same
     /// story across sources. See `FeedItem.storyKey(for:)`.
@@ -190,6 +194,7 @@ extension FeedItem {
         case crossRefs
         case discussionURL
         case relatedURLs
+        case isUndated
     }
 
     init(from decoder: Decoder) throws {
@@ -207,7 +212,8 @@ extension FeedItem {
             intraSourceRank: try container.decodeIfPresent(Double.self, forKey: .intraSourceRank) ?? 0,
             crossRefs: try container.decodeIfPresent([Source].self, forKey: .crossRefs) ?? [],
             discussionURL: try container.decodeIfPresent(URL.self, forKey: .discussionURL),
-            relatedURLs: try container.decodeIfPresent([URL].self, forKey: .relatedURLs) ?? []
+            relatedURLs: try container.decodeIfPresent([URL].self, forKey: .relatedURLs) ?? [],
+            isUndated: try container.decodeIfPresent(Bool.self, forKey: .isUndated) ?? false
         )
     }
 }

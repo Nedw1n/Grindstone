@@ -99,7 +99,8 @@ private enum NatureBiotechService {
                 points: nil,
                 snippet: item.snippet,
                 intraSourceRank: item.intraSourceRank,
-                crossRefs: []
+                crossRefs: [],
+                isUndated: item.isUndated
             )
         }
     }
