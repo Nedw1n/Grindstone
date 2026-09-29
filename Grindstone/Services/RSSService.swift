@@ -129,7 +129,8 @@ final class RSSParser: NSObject, XMLParserDelegate {
     private var currentTitle = ""
     private var currentLink = ""
     private var currentDate = ""
-    private var currentSnippet = ""
+    private var currentSummary = ""
+    private var currentContent = ""
     private var currentComments = ""
     private var isInsideItem = false
 
@@ -138,7 +139,9 @@ final class RSSParser: NSObject, XMLParserDelegate {
     private let titleTags: Set<String> = ["title"]
     private let linkTags: Set<String> = ["link"]
     private let dateTags: Set<String> = ["pubDate", "published", "updated", "dc:date"]
-    private let snippetTags: Set<String> = ["description", "summary", "content"]
+    private let summaryTags: Set<String> = ["description", "summary"]
+    /// Atom's full post body, used for the snippet only when there is no summary.
+    private let contentTags: Set<String> = ["content"]
     private let commentsTags: Set<String> = ["comments"]
 
     init(source: Source) {
@@ -164,12 +167,17 @@ final class RSSParser: NSObject, XMLParserDelegate {
             currentTitle = ""
             currentLink = ""
             currentDate = ""
-            currentSnippet = ""
+            currentSummary = ""
+            currentContent = ""
             currentComments = ""
         }
 
-        // Atom uses <link href="..."/> as a self-closing tag
-        if element == "link", isInsideItem, let href = attributes["href"] {
+        // Atom uses self-closing <link href="..."/> tags, often several per
+        // entry (the comments feed, an edit link). The article is the first one
+        // marked rel="alternate", or with no rel at all.
+        if element == "link", isInsideItem, let href = attributes["href"],
+           (attributes["rel"] ?? "alternate") == "alternate",
+           currentLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             currentLink = href
         }
     }
@@ -183,11 +191,20 @@ final class RSSParser: NSObject, XMLParserDelegate {
             currentLink += string
         } else if dateTags.contains(currentElement) {
             currentDate += string
-        } else if snippetTags.contains(currentElement) {
-            currentSnippet += string
+        } else if summaryTags.contains(currentElement) {
+            currentSummary += string
+        } else if contentTags.contains(currentElement) {
+            currentContent += string
         } else if commentsTags.contains(currentElement) {
             currentComments += string
         }
+    }
+
+    /// Text wrapped in <![CDATA[...]]> arrives here rather than in
+    /// `foundCharacters`. Many feeds wrap titles and descriptions this way.
+    func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
+        guard let string = String(data: CDATABlock, encoding: .utf8) else { return }
+        self.parser(parser, foundCharacters: string)
     }
 
     func parser(_ parser: XMLParser, didEndElement element: String,
@@ -204,7 +221,8 @@ final class RSSParser: NSObject, XMLParserDelegate {
         guard !title.isEmpty, let url = URL(string: link) else { return }
 
         let date = Self.parseDate(currentDate.trimmingCharacters(in: .whitespacesAndNewlines))
-        let snippet = currentSnippet
+        let summary = currentSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let snippet = (summary.isEmpty ? currentContent : summary)
             .strippingHTML()
             .decodingHTMLEntities()
             .condensedWhitespace()

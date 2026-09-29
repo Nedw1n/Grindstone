@@ -620,6 +620,13 @@ private final class StatNewsRSSParser: NSObject, XMLParserDelegate {
         }
     }
 
+    /// STAT's WordPress feed wraps descriptions and categories in CDATA, which
+    /// arrives here rather than in `foundCharacters`.
+    func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
+        guard let string = String(data: CDATABlock, encoding: .utf8) else { return }
+        self.parser(parser, foundCharacters: string)
+    }
+
     func parser(
         _ parser: XMLParser,
         didEndElement element: String,
