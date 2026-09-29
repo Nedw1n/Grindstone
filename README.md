@@ -8,7 +8,8 @@ list, and flags stories that show up in more than one place.
 
 - **Today** – the merged front page. Tabs along the top filter by source.
   **Top of the Stack** sets the three stories that matter most as a cairn:
-  cross-posted stories first, then the top story from each source. Below it,
+  the first stories from three different sources, led by a cross-posted story
+  when it also ranks high on its own page. Below it,
   swipe right to save and left to mark read. Read stories drop to a lighter
   type weight. The Options menu hides read stories, toggles previews, and marks
   everything read.
@@ -52,19 +53,34 @@ and shared components are in `Design/`.
 
 ## Ranking
 
-The merged front page scores each story from three signals:
+Today is built by **fair share**, so every source you have on is seen, not
+just the busiest. The ranking knows nothing about particular sources. Each
+story carries its **channel** (the feed it came from: Hacker News, STAT, one of
+your RSS feeds) and whether that channel publishes its own order.
 
-- **Placement (50%)** – where the story sits on its source's front page.
-  Only Hacker News and Memeorandum rank editorially; the biotech journals and
-  RSS feeds list the newest first, so their stories get a neutral middle score
-  rather than a position that would count recency twice.
-- **Cross-posting (35%)** – how many other sources carry the same story.
-  Stories are matched across each source's whole fetch by normalized link
-  (scheme, `www.`/mobile/AMP variants, fragments, and tracking parameters are
-  ignored), by the other outlets Memeorandum lists for a story, and by
-  headlines that share most of their words. Each story appears once, with its
-  best placement and every other source as a cross-reference.
-- **Recency (15%)** – halves every six hours, on an absolute scale.
+- **Standing** – how strongly a story stands on its own channel, from 0 to 1.
+  A ranked page (Hacker News, Memeorandum) is judged by position on a page of
+  30, whatever its fetch size. A newest-first feed (journals, blogs) is judged
+  by freshness on its own clock: it halves every twice the feed's typical gap
+  between posts, from 3 to 24 hours, counted from the feed's own newest story
+  (up to a day behind is forgiven, for feeds that post in batches or date by
+  day). So a weekly blog and a wire feed are each judged by their own rhythm.
+- **Fresh enough** – newest-first stories stay in Today while their standing
+  is at least 0.35 and they are under 36 hours old; older ones stay in their
+  source's tab. Ranked pages decide for themselves.
+- **Cross-posting** – a story carried by several sources gains 0.25 standing
+  per extra source. Stories are matched across each source's whole fetch by
+  normalized link (scheme, `www.`/mobile/AMP variants, fragments, tracking and
+  gift-link parameters are ignored), by the other outlets Memeorandum lists
+  for a story, and by headlines that share most of their words.
+- **Fair share** – each position goes to the source furthest below its share
+  of the list so far, which takes its best remaining story; its channels take
+  turns the same way. A source of ranked pages gets twice the share of a
+  newest-first one, since it has already chosen what matters. A source with
+  nothing fresh gives up its turn. Ranked pages keep their own order.
+
+`Tools/FeedLab` replays real days through this code; its `FINDINGS.md` has the
+measurements behind the design.
 
 Stories that arrived since your last visit (a gap of five minutes or more)
 sit above an **Earlier** line, so you can see where you left off.

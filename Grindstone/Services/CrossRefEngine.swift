@@ -82,8 +82,8 @@ enum CrossRefEngine {
             lead.crossRefs = Source.allCases.filter { $0 != lead.source && sources.contains($0) }
 
             // A story's placement is the best front-page position it holds anywhere.
-            if let bestPlacement = members.filter(\.source.hasEditorialOrder).map(\.intraSourceRank).max(),
-               lead.source.hasEditorialOrder {
+            if let bestPlacement = members.filter(\.isRanked).map(\.intraSourceRank).max(),
+               lead.isRanked {
                 lead.intraSourceRank = max(lead.intraSourceRank, bestPlacement)
             }
 
@@ -122,12 +122,12 @@ enum CrossRefEngine {
         return result
     }
 
-    /// Orders candidates for a merged story's lead: editorially ranked sources
+    /// Orders candidates for a merged story's lead: stories from ranked pages
     /// first (they carry placement and discussion), then richer metadata, then
     /// better placement.
     private static func isLessPreferredLead(_ lhs: FeedItem, _ rhs: FeedItem) -> Bool {
-        if lhs.source.hasEditorialOrder != rhs.source.hasEditorialOrder {
-            return !lhs.source.hasEditorialOrder
+        if lhs.isRanked != rhs.isRanked {
+            return !lhs.isRanked
         }
         let lhsMetadata = metadataScore(lhs)
         let rhsMetadata = metadataScore(rhs)

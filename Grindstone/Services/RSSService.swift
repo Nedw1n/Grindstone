@@ -33,7 +33,9 @@ enum RSSService {
 }
 
 enum ManualRSSService {
-    static func fetch(feeds: [ManualRSSFeed], limit: Int = 32) async throws -> [FeedItem] {
+    /// Each feed contributes at most `perFeedLimit` of its newest stories, so a
+    /// busy feed can't push a quiet one out of the lane.
+    static func fetch(feeds: [ManualRSSFeed], perFeedLimit: Int = 12) async throws -> [FeedItem] {
         let enabledFeeds = feeds.filter(\.isEnabled)
         guard !enabledFeeds.isEmpty else { return [] }
 
@@ -43,7 +45,7 @@ enum ManualRSSService {
         ) { group in
             for feed in enabledFeeds {
                 group.addTask {
-                    await load(feed: feed)
+                    await load(feed: feed, limit: perFeedLimit)
                 }
             }
 
@@ -65,10 +67,10 @@ enum ManualRSSService {
             throw FeedFetchError.emptyResponse(source: Source.rss.rawValue)
         }
 
-        return Array(rankedItems.prefix(limit))
+        return rankedItems
     }
 
-    private static func load(feed: ManualRSSFeed) async -> ManualRSSLoadResult {
+    private static func load(feed: ManualRSSFeed, limit: Int) async -> ManualRSSLoadResult {
         guard let url = feed.url else {
             return ManualRSSLoadResult(
                 items: [],
@@ -77,7 +79,10 @@ enum ManualRSSService {
         }
 
         do {
-            let items = try await RSSService.fetch(url: url, source: .rss).map { item in
+            let newest = try await RSSService.fetch(url: url, source: .rss)
+                .sorted { $0.publishedAt > $1.publishedAt }
+                .prefix(limit)
+            let items = newest.map { item in
                 FeedItem(
                     id: item.id,
                     title: item.title,
@@ -91,11 +96,12 @@ enum ManualRSSService {
                     intraSourceRank: item.intraSourceRank,
                     crossRefs: [],
                     discussionURL: item.discussionURL,
-                    isUndated: item.isUndated
+                    isUndated: item.isUndated,
+                    channel: "rss:\(feed.id.uuidString)"
                 )
             }
 
-            return ManualRSSLoadResult(items: items, errorMessage: nil)
+            return ManualRSSLoadResult(items: Array(items), errorMessage: nil)
         } catch is CancellationError {
             return ManualRSSLoadResult(items: [], errorMessage: nil)
         } catch {

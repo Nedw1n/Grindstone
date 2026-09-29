@@ -20,8 +20,8 @@ final class FeedViewModel: ObservableObject {
     @Published private var sourceItems: [Source: [FeedItem]] = [:]
     /// Every source each fetched story appeared on, keyed by item ID.
     @Published private var storySources: [String: Set<Source>] = [:]
-    /// The merged entry each fetched item was folded into, keyed by item ID.
-    private var leadIDs: [String: String] = [:]
+    /// How strongly each front-page story stands on its own channel, by ID.
+    private var standings: [String: Double] = [:]
 
     private let rssStore: ManualRSSFeedStore
     private let preferences: FeedPreferences
@@ -81,31 +81,31 @@ final class FeedViewModel: ObservableObject {
         preferences.visibleSources
     }
 
-    /// The three stories for Top of the Stack: cross-posted stories first (the
-    /// app's strongest signal that something matters), then the top story of each
-    /// source.
+    /// Top of the Stack: up to three stories from different sources, in
+    /// Today's order. A story carried by several sources leads, but only when
+    /// it also stands in the top half of its own page.
     var featured: [FeedItem] {
         var picks: [FeedItem] = []
-        var seen = Set<String>()
+        var usedSources = Set<Source>()
 
-        for item in items where !item.crossRefs.isEmpty {
-            guard seen.insert(item.id).inserted else { continue }
+        let crossPosted = items.first { item in
+            !item.crossRefs.isEmpty && (standings[item.id] ?? 0) >= Self.featuredCrossPostStanding
+        }
+        if let crossPosted {
+            picks.append(crossPosted)
+            usedSources.insert(crossPosted.source)
+            usedSources.formUnion(crossPosted.crossRefs)
+        }
+
+        for item in items where picks.count < 3 && !usedSources.contains(item.source) {
             picks.append(item)
-            if picks.count == 3 { break }
+            usedSources.insert(item.source)
         }
 
-        for source in Source.featuredSources where preferences.isEnabled(source) {
-            // A source's top story may have been folded into another source's
-            // entry; use the merged entry so a story never takes two stones.
-            let topLeadID = sourceItems[source]?.first.map { leadIDs[$0.id] ?? $0.id }
-            guard let top = items.first(where: { $0.id == topLeadID })
-                    ?? items.first(where: { $0.source == source }),
-                  seen.insert(top.id).inserted else { continue }
-            picks.append(top)
-        }
-
-        return Array(picks.prefix(3))
+        return picks
     }
+
+    private static let featuredCrossPostStanding = 0.5
 
     /// Items filtered by the selected source tab.
     var filtered: [FeedItem] {
@@ -228,8 +228,7 @@ final class FeedViewModel: ObservableObject {
             if result.wasSuccessful {
                 updated[result.source] = Self.keepingFirstSeenDates(
                     in: result.items,
-                    previous: previousSourceItems[result.source] ?? [],
-                    source: result.source
+                    previous: previousSourceItems[result.source] ?? []
                 )
             } else {
                 updated[result.source] = updated[result.source] ?? []
@@ -250,8 +249,7 @@ final class FeedViewModel: ObservableObject {
     /// other story instead of looking brand new on every refresh.
     private static func keepingFirstSeenDates(
         in items: [FeedItem],
-        previous: [FeedItem],
-        source: Source
+        previous: [FeedItem]
     ) -> [FeedItem] {
         guard items.contains(where: \.isUndated) else { return items }
 
@@ -266,17 +264,17 @@ final class FeedViewModel: ObservableObject {
             return copy
         }
 
-        // Date-ordered sources list the newest first, so restamped stories go
-        // back to their place by age.
-        guard !source.hasEditorialOrder else { return restamped }
+        // Newest-first lanes put restamped stories back in their place by age;
+        // a ranked page keeps its own order.
+        guard !restamped.contains(where: \.isRanked) else { return restamped }
         return FeedRankingEngine.assignIntraSourceRanks(
             to: restamped.sorted { $0.publishedAt > $1.publishedAt }
         )
     }
 
     /// Builds the merged front page. Stories are matched across the whole of
-    /// each source's fetch, not just the slice that makes the front page, so a
-    /// story low on one source still counts as cross-posted.
+    /// each source's fetch, so a story low on one source still counts as
+    /// cross-posted, and then ordered by fair share (see `FeedRankingEngine`).
     private func applyMerge(
         from sourceItems: [Source: [FeedItem]],
         definitions: [FeedSourceDefinition]
@@ -285,26 +283,16 @@ final class FeedViewModel: ObservableObject {
         guard !allFetched.isEmpty else {
             items = []
             storySources = [:]
-            leadIDs = [:]
+            standings = [:]
             return
         }
 
         let merged = CrossRefEngine.mergeStories(allFetched)
         storySources = merged.storySources
-        leadIDs = merged.leadIDs
 
-        // The front page keeps each source's top slice, as before: a story makes
-        // it when any of its copies is in its source's slice.
-        let frontPageLeadIDs = Set(definitions.flatMap { definition in
-            (sourceItems[definition.source] ?? []).prefix(definition.mergeLimit).compactMap { item in
-                merged.leadIDs[item.id]
-            }
-        })
-        let frontPage = merged.items.filter { lead in
-            frontPageLeadIDs.contains(lead.id)
-        }
-
-        items = FeedRankingEngine.sortMergedItems(frontPage)
+        let ranking = FeedRankingEngine.fairShare(merged.items)
+        standings = ranking.standings
+        items = ranking.items
     }
 
     private func restoreCachedItems() {

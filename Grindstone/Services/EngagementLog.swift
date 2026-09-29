@@ -104,7 +104,7 @@ final class EngagementLog: ObservableObject {
             points: item.points,
             commentCount: item.commentCount,
             storyAgeMinutes: max(0, Int(now.timeIntervalSince(item.publishedAt) / 60)),
-            rankScore: FeedRankingEngine.score(for: item, now: now),
+            rankScore: FeedRankingEngine.standing(of: item, now: now),
             surface: placement?.surface,
             position: placement?.position,
             wasNew: ReadingSessionStore.shared.isNew(item),

@@ -10,6 +10,13 @@ extension String {
         replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
     }
 
+    /// Whether `word` (or a phrase) appears as whole words, ignoring case, with
+    /// an optional plural "s": "gene" matches "genes" but not "generative".
+    func containsWord(_ word: String) -> Bool {
+        let pattern = #"\b"# + NSRegularExpression.escapedPattern(for: word) + #"s?\b"#
+        return range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
     func decodingHTMLEntities() -> String {
         var decoded = self
         let namedEntities: [String: String] = [

@@ -23,6 +23,18 @@ struct FeedItem: Identifiable, Hashable, Codable, Sendable {
     /// Grindstone first saw the story, carried across refreshes by
     /// `FeedViewModel` so the story ages instead of looking brand new each time.
     var isUndated: Bool = false
+    /// The feed within its source this story came from ("hn", "stat",
+    /// "rss:<feed id>"). Today takes turns between a source's channels, so a
+    /// busy feed can't crowd out a quiet one. Empty means the source itself.
+    var channel: String = ""
+    /// `true` when the channel publishes its own order (a ranked front page),
+    /// `false` when it just lists the newest first.
+    var isRanked: Bool = false
+
+    /// The channel, falling back to the source for items that don't name one.
+    var channelKey: String {
+        channel.isEmpty ? source.rawValue : channel
+    }
 
     /// The link reduced to what identifies the article, for matching the same
     /// story across sources. See `FeedItem.storyKey(for:)`.
@@ -72,6 +84,8 @@ struct FeedItem: Identifiable, Hashable, Codable, Sendable {
         "ref", "source", "fbclid", "gclid", "dclid", "msclkid", "mc_cid", "mc_eid",
         "ocid", "cmpid", "smid", "smtyp", "sref", "igshid", "_ga", "_gl", "spm",
         "share", "via", "rss", "outputtype", "at_medium", "at_campaign", "ito", "s_cid",
+        // Gift and unlocked-article links (New York Times, Washington Post).
+        "unlocked_article_code", "pwapi_token", "gift", "giftcopy",
     ]
 
     private static func isTrackingParameter(_ name: String) -> Bool {
@@ -195,16 +209,22 @@ extension FeedItem {
         case discussionURL
         case relatedURLs
         case isUndated
+        case channel
+        case isRanked
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let source = try container.decode(Source.self, forKey: .source)
+        // Items cached before channels carried their kind came from Hacker News
+        // and Memeorandum's ranked pages, or from newest-first feeds.
+        let wasRanked = source == .hn || source == .memo
         self = FeedItem(
             id: try container.decode(String.self, forKey: .id),
             title: try container.decode(String.self, forKey: .title),
             url: try container.decode(URL.self, forKey: .url),
             outlet: try container.decodeIfPresent(String.self, forKey: .outlet),
-            source: try container.decode(Source.self, forKey: .source),
+            source: source,
             publishedAt: try container.decode(Date.self, forKey: .publishedAt),
             commentCount: try container.decodeIfPresent(Int.self, forKey: .commentCount),
             points: try container.decodeIfPresent(Int.self, forKey: .points),
@@ -213,7 +233,9 @@ extension FeedItem {
             crossRefs: try container.decodeIfPresent([Source].self, forKey: .crossRefs) ?? [],
             discussionURL: try container.decodeIfPresent(URL.self, forKey: .discussionURL),
             relatedURLs: try container.decodeIfPresent([URL].self, forKey: .relatedURLs) ?? [],
-            isUndated: try container.decodeIfPresent(Bool.self, forKey: .isUndated) ?? false
+            isUndated: try container.decodeIfPresent(Bool.self, forKey: .isUndated) ?? false,
+            channel: try container.decodeIfPresent(String.self, forKey: .channel) ?? "",
+            isRanked: try container.decodeIfPresent(Bool.self, forKey: .isRanked) ?? wasRanked
         )
     }
 }

@@ -2,20 +2,19 @@ import Foundation
 
 struct FeedSourceDefinition: Sendable {
     let source: Source
-    let mergeLimit: Int
     let fetch: @Sendable () async throws -> [FeedItem]
 }
 
 enum FeedSourceCatalog {
     private static let builtInDefinitions: [FeedSourceDefinition] = [
-        FeedSourceDefinition(source: .hn, mergeLimit: 20) {
+        FeedSourceDefinition(source: .hn) {
             try await HNService.fetch(limit: 60)
         },
-        FeedSourceDefinition(source: .memo, mergeLimit: 20) {
+        FeedSourceDefinition(source: .memo) {
             try await MemeorandumService.fetch(limit: 40)
         },
-        FeedSourceDefinition(source: .biotech, mergeLimit: 15) {
-            try await BiotechService.fetch(limit: 24)
+        FeedSourceDefinition(source: .biotech) {
+            try await BiotechService.fetch()
         },
     ]
 
@@ -29,8 +28,8 @@ enum FeedSourceCatalog {
 
         if rssFeeds.contains(where: \.isEnabled) {
             definitions.append(
-                FeedSourceDefinition(source: .rss, mergeLimit: 20) {
-                    try await ManualRSSService.fetch(feeds: rssFeeds, limit: 32)
+                FeedSourceDefinition(source: .rss) {
+                    try await ManualRSSService.fetch(feeds: rssFeeds)
                 }
             )
         }

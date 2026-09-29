@@ -125,7 +125,9 @@ private struct HNItem: Decodable {
             snippet: nil,
             intraSourceRank: 0,
             crossRefs: [],
-            discussionURL: discussionURL
+            discussionURL: discussionURL,
+            channel: "hn",
+            isRanked: true
         )
     }
 }
