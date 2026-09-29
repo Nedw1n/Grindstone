@@ -189,6 +189,63 @@ Why this holds up as sources change:
 4. **Make Top of the Stack generic.** Lead with a cross-posted story only when its standing is at least 0.5; otherwise take the first three stories from different groups in the fair-share order. Base the cross-post bonus on how many groups carry the story, not on how many sources exist.
 5. **Later, learn the group weights from `engagement.jsonl`,** which the app already collects: share of opens and reading time per group. That's also the test "better" really needs: export it after a week or two and replay it against these strategies.
 
+## What was implemented
+
+Recommendations 1–4 are now in the app. Learning weights from reading history (#5) is not.
+
+### Lane fixes
+
+- **bioRxiv:** reads the newest page of each category.
+- **Memeorandum:**
+  - The parser accepts links with extra attributes, and a gift link's `searchurl` becomes the story's ID.
+  - Every story gets its Comments link.
+  - A story missing from the feed is dated by interpolating along the day's permalink numbers from the feed's dated stories, instead of midnight UTC.
+  - A feed failure no longer takes the homepage down with it.
+- **Nature:** reads the Nature Biotechnology feed, without correction notices.
+- **arXiv and STAT:** match keywords as whole words.
+- **STAT:** subscriber-only stories show "STAT+" as the outlet.
+- **Personal feeds:** each feed contributes up to 12 of its own newest stories, instead of all of them sharing 32 slots.
+- **Biotech:** the lane no longer has a shared cap of 24.
+
+### Sources as data, and fair share
+
+- Every story carries its channel and whether that channel publishes its own ranking (`FeedItem.channel`, `isRanked`), set by the service that fetched it.
+- The engine and the cross-source matcher read only those. There is no list of sources, no hard-coded Top of the Stack sources, and no cross-post bonus scaled by how many sources exist.
+- Top of the Stack takes the first three stories from different sources. A cross-posted story leads only when it stands in the top half of its own page.
+
+### Two adjustments the replays called for
+
+Replaying the first implementation showed two problems:
+
+1. **bioRxiv filled most of the biotech share.** Its date-only timestamps all tie, and at 9 pm ET they even read as an hour old.
+2. **arXiv and evening STAT never qualified.** arXiv surfaces a day after its papers' submission times, and STAT's hourly rhythm expired its stories within about 4½ hours.
+
+The fixes:
+
+- **A newest-first channel is now judged from its own newest story,** forgiving up to 24 h of lag. The 36-hour cap still applies.
+- **By default, a source of ranked pages gets twice the share of a newest-first one,** since it has already chosen what matters. The weights stay the knob.
+
+Over 16 snapshots, biotech's top-20 slots now spread across bioRxiv 36, STAT 22, arXiv 22 and Nature Biotechnology 11. The first implementation had bioRxiv at 84 of 128.
+
+### Before and after, same data
+
+`run.sh --rev f3889c2` compared with the new code, on the 14 history snapshots plus two live snapshots (12:40 and 15:13 ET, Sep 29):
+
+| | History before | History after | Live before | Live after |
+| --- | --- | --- | --- | --- |
+| Top 10 (HN / Memo / Bio / RSS) | 10 / 0 / 0 / 0 | 5 / 0 / 3 / 2 | 8 / 2 / 0 / 0 | 3.5 / 2.5 / 2 / 2 |
+| First biotech / RSS story | #19–22 / #21–24 | #2 / #3 | #28–33 / #28–29 | #3 / #4 |
+| HN keeps its own order (τ) | 0.79 | 1.00 | 0.66 | 0.99 |
+| Median age of the top 10 | 2.8 h | 3.1 h | 3.0 h | 4.4 h |
+| Oldest story in the top 10 | 5.1 h | 13.3 h | 13.4 h | 17.9 h |
+| Top of the Stack | HN + Bio | HN + Bio + RSS | HN + Memo, a weak cross-post first | HN + Memo + Bio |
+
+The older top-10 stragglers are date-only preprints (bioRxiv, Nature Biotechnology), which count from midnight.
+
+### Correction to the history data above
+
+FeedLab's download cache cut file names at 200 characters, and arXiv's query URLs differ only after that point. So every history snapshot used Sep 22's arXiv response. That affected only arXiv's lane in history, and none of the findings rest on it. The cache key now includes a hash of the whole URL, and the history was recollected. Remaining caveat: in history, arXiv papers appear from their submission time, but live data shows the API lists them about a day later, so history slightly flatters arXiv.
+
 ## Reproduce
 
 ```sh

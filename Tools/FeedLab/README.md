@@ -12,6 +12,8 @@ rather than one-off impressions. Not part of the app target.
 #    `history` rebuilds past moments (US Eastern) from what the sources still serve.
 python3 Tools/FeedLab/collect.py live
 python3 Tools/FeedLab/collect.py history --days 2026-09-22 2026-09-23 --times 13:00 21:00
+# After the app starts requesting something new, bring older snapshots along:
+python3 Tools/FeedLab/collect.py upgrade
 
 # 2. Replay them through the working tree's code (or --rev <commit>).
 Tools/FeedLab/run.sh --report Tools/FeedLab/reports/current.md
@@ -39,10 +41,10 @@ snapshot rebuilds a past moment:
 | --- | --- |
 | Hacker News | its per-day archive (`front?day=`), ranked at the time with HN's gravity formula using final points; `live` records how closely this matches the real front page |
 | Memeorandum | switched off: its archive pages are blocked (Cloudflare) and its feed holds only the latest hour |
-| bioRxiv | the API over the week up to that day, cursor 0 exactly as the app asks (every page is also saved, to see what the app misses) |
+| bioRxiv | the API over the week up to that day: the first page and the newest page, exactly as the app asks |
 | arXiv | the app's query, limited to submissions before the time |
 | STAT, Marginal Revolution | rebuilt as they stood then from their paged WordPress archives (`?paged=N`) |
-| Nature | the live feed with later entries removed; it only reaches back a day or two |
+| Nature | the subject feed and Nature Biotechnology's own feed, live, with later entries removed |
 
 The Wayback Machine would allow exact past front pages, but it drops
 connections from this environment's network.

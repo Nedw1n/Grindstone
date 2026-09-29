@@ -26,8 +26,12 @@ enum Replay {
         let host = components?.host ?? ""
         switch host {
         case "api.biorxiv.org":
+            // /details/biorxiv/<start>/<end>/<cursor>/json: the dates follow the
+            // real clock, so only the category and page identify a response.
             let category = components?.queryItems?.first { $0.name == "category" }?.value ?? ""
-            return "biorxiv/\(category)"
+            let parts = (components?.path ?? "").split(separator: "/")
+            let cursor = parts.count >= 5 ? String(parts[4]) : "0"
+            return "biorxiv/\(category)/\(cursor)"
         case "export.arxiv.org":
             return "arxiv"
         default:

@@ -24,6 +24,7 @@ Two kinds of snapshot:
 Usage:
   collect.py live [--out DIR]
   collect.py history --days 2026-09-22 ... --times 13:00 21:00 [--out DIR]
+  collect.py upgrade [--out DIR]    bring older snapshots up to date
 
 Times are US Eastern. Only the standard library is used.
 """
@@ -31,6 +32,7 @@ Times are US Eastern. Only the standard library is used.
 import argparse
 import datetime as dt
 import email.utils
+import hashlib
 import html
 import json
 import math
@@ -51,7 +53,9 @@ HN_LANE = 60  # HNService.fetch(limit: 60)
 
 FEEDS = {
     "www.statnews.com/feed/": "https://www.statnews.com/feed/",
+    # The subject feed the app read before switching to the journal's own.
     "www.nature.com/subjects/biotechnology.rss": "https://www.nature.com/subjects/biotechnology.rss",
+    "www.nature.com/nbt.rss": "https://www.nature.com/nbt.rss",
     "marginalrevolution.com/feed": "https://marginalrevolution.com/feed",
 }
 BIORXIV_CATEGORIES = ["bioengineering", "genetics", "genomics"]
@@ -77,7 +81,10 @@ class Fetcher:
         self.last_request = 0.0
 
     def get(self, url, *, use_cache=True):
-        key = re.sub(r"[^A-Za-z0-9._-]+", "_", url)[:200]
+        # A readable prefix plus a hash of the whole URL: long URLs (arXiv
+        # queries) differ only near the end, where a plain prefix is cut off.
+        digest = hashlib.sha1(url.encode()).hexdigest()[:16]
+        key = re.sub(r"[^A-Za-z0-9._-]+", "_", url)[:150] + "_" + digest
         path = os.path.join(self.cache_dir, key)
         if use_cache and os.path.exists(path):
             with open(path, "rb") as f:
@@ -336,9 +343,10 @@ def biorxiv(fetcher, moment, files, notes, analysis, *, live):
     for category in BIORXIV_CATEGORIES:
         first_url = f"https://api.biorxiv.org/details/biorxiv/{start}/{end}/0/json?category={category}"
         body = fetcher.get(first_url, use_cache=not live)
-        files[f"biorxiv/{category}"] = body.decode("utf-8", "replace")
+        files[f"biorxiv/{category}/0"] = body.decode("utf-8", "replace")
         first = json.loads(body)
         total = int(first.get("messages", [{}])[0].get("total", 0) or 0)
+        save_biorxiv_newest_page(fetcher, files, category, start, end, first, use_cache=not live)
         records = list(first.get("collection", []))
         cursor = len(records)
         while cursor < total:
@@ -361,6 +369,56 @@ def biorxiv(fetcher, moment, files, notes, analysis, *, live):
         notes.append(f"bioRxiv/{category}: {total} records {start}..{end}; the app reads the first "
                      f"{len(first.get('collection', []))}, dated {first_dates[0] if first_dates else '?'}.."
                      f"{first_dates[-1] if first_dates else '?'}")
+
+
+def save_biorxiv_newest_page(fetcher, files, category, start, end, first, *, use_cache=True):
+    """The page the app asks for after the first: the window's last `count`
+    records (cursor = total - count), which are the newest."""
+    total = int(first.get("messages", [{}])[0].get("total", 0) or 0)
+    count = len(first.get("collection", []))
+    if count and total > count:
+        cursor = total - count
+        url = f"https://api.biorxiv.org/details/biorxiv/{start}/{end}/{cursor}/json?category={category}"
+        files[f"biorxiv/{category}/{cursor}"] = fetcher.get(url, use_cache=use_cache).decode("utf-8", "replace")
+
+
+def upgrade(fetcher, out_dir):
+    """Brings snapshots collected before the app read bioRxiv's newest page and
+    Nature Biotechnology's own feed up to date, so old and new code replay the
+    same data: bioRxiv page 0 moves to its per-page key, the newest page is
+    fetched for the same window, and the journal feed is added, trimmed to the
+    snapshot."""
+    for path in sorted(os.listdir(out_dir)):
+        meta_path = os.path.join(out_dir, path, "snapshot.json")
+        if not os.path.exists(meta_path):
+            continue
+        meta = json.load(open(meta_path))
+        moment = dt.datetime.fromisoformat(meta["time"])
+        files = {}
+        for key, name in list(meta["files"].items()):
+            if key.startswith("biorxiv/") and key.count("/") == 1:
+                files[key + "/0"] = open(os.path.join(out_dir, path, name), encoding="utf-8").read()
+                del meta["files"][key]
+        for key, name in meta["files"].items():
+            if key.startswith("biorxiv/") and key.endswith("/0"):
+                files.setdefault(key, open(os.path.join(out_dir, path, name), encoding="utf-8").read())
+        end = moment.astimezone(UTC).date()
+        start = end - dt.timedelta(days=7)
+        for key in [k for k in files if k.startswith("biorxiv/")]:
+            category = key.split("/")[1]
+            save_biorxiv_newest_page(fetcher, files, category, start, end, json.loads(files[key]))
+        if "www.nature.com/nbt.rss" not in meta["files"]:
+            xml, kept, _, _ = trim_feed(fetcher.get(FEEDS["www.nature.com/nbt.rss"]).decode("utf-8", "replace"), moment)
+            files["www.nature.com/nbt.rss"] = xml
+            meta["notes"].append(f"www.nature.com/nbt.rss: added later from the live feed, {kept} entries before the snapshot")
+        for key, content in files.items():
+            name = re.sub(r"[^A-Za-z0-9._-]+", "_", key)
+            with open(os.path.join(out_dir, path, name), "w", encoding="utf-8") as f:
+                f.write(content)
+            meta["files"][key] = name
+        with open(meta_path, "w") as f:
+            json.dump(meta, f, indent=2)
+        print(f"upgraded {path}: " + ", ".join(sorted(k for k in files if k.startswith("biorxiv/") or "nbt" in k)))
 
 
 def arxiv(fetcher, moment, files, notes, *, live):
@@ -402,12 +460,16 @@ def run_steps(steps, notes):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("mode", choices=["live", "history"])
+    parser.add_argument("mode", choices=["live", "history", "upgrade"])
     parser.add_argument("--days", nargs="*", default=[])
     parser.add_argument("--times", nargs="*", default=["13:00", "21:00"])
     parser.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
     args = parser.parse_args()
     fetcher = Fetcher(os.path.join(args.out, ".cache"))
+
+    if args.mode == "upgrade":
+        upgrade(fetcher, args.out)
+        return
 
     if args.mode == "live":
         moment = dt.datetime.now(UTC).replace(microsecond=0)

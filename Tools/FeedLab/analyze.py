@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Tries ranking alternatives on the app's own replayed output.
 
+Models the weighted-score ranking the app used before fair share (commit
+f3889c2); run it on exports from that code (run.sh --rev f3889c2).
+
 Reads the per-snapshot exports that run.sh writes (<report>.lanes/*.json):
 the stories the app put on the front page, with the fields its ranking uses.
 Each variant re-orders that same set, so differences come from the ranking
@@ -250,10 +253,10 @@ def main():
         estimates = memo_estimated_times(os.path.join(args.data, run["id"]), run["lanes"].get("Memo", []))
         ctx = {"laneCount": lane_counts, "memoEstimates": estimates}
         baseline = v_current(items, now, ctx)
-        # Sanity check: the re-implementation must reproduce the app's order.
-        assert [i["id"] for i in baseline] == [i["id"] for i in items] or all(
-            abs(current_score(a, now) - current_score(b, now)) < 1e-9 for a, b in zip(baseline, items)
-        ), f"{run['id']}: re-scored order differs from the app"
+        # Replaying the ranking before fair share, the re-implementation should
+        # reproduce the app's order exactly; with later code it won't.
+        if [i["id"] for i in baseline] != [i["id"] for i in items]:
+            out.append(f"_Note: {run['id']} was exported by a different ranking than the one modeled here._")
         out += [f"## {run['id']}", "",
                 "| Variant | Top 10 HN/Memo/Bio/RSS | Top 20 | First Bio | First RSS | τ HN | τ Memo | Median age top 10 (h) | Kept of current top 10 | Mean current score of top 10 |",
                 "|---|---|---|---|---|---|---|---|---|---|"]

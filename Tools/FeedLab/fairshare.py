@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """A source-agnostic way to build Today, tested against the current ranking.
 
+This is the prototype from the deep dive. The app now builds Today this way
+(FeedRankingEngine.fairShare), with two refinements the replays called for:
+newest-first channels are judged from their own newest story (forgiving up to
+24 h of lag), and ranked front pages get twice the share by default. To measure
+the app itself, compare run.sh --rev f3889c2 against the working tree.
+
 Nothing in the strategy knows about Hacker News, Memeorandum, biotech or RSS.
 It only knows, for each channel (one feed or one ranked page):
   kind     "ranked" (the channel publishes an order) or "chronological"

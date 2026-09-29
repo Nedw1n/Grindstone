@@ -32,6 +32,7 @@ struct Summary: Codable {
     var crossPostedInTop10: Int
     var editorialTau: [String: Double]
     var medianAgeTop10Hours: Double
+    var oldestTop10Hours: Double
     var over24hInTop20: Int
     var featuredSources: [String]
     var top10Keys: [String]
@@ -125,13 +126,13 @@ for directory in snapshotDirectories {
     report += "- Lanes: " + Source.allCases.map { "\(label($0)) \(lanes[$0]?.count ?? 0)" }.joined(separator: ", ")
         + "; front page \(front.count)\n\n"
 
-    // Front page.
-    report += "| # | Src | Also | Age h | Place | Score | Title | Outlet |\n|---|---|---|---|---|---|---|---|\n"
+    // Front page. Only fields every version of the app has, so the same
+    // evaluator can replay old and new code over the same snapshots.
+    report += "| # | Src | Also | Age h | Own place | Title | Outlet |\n|---|---|---|---|---|---|---|\n"
     for (index, item) in front.prefix(25).enumerated() {
         let age = hours(moment.timeIntervalSince(item.publishedAt))
         report += "| \(index + 1) | \(label(item.source)) | \(item.orderedCrossRefs.map(label).joined(separator: ",")) "
-            + "| \(format(age)) | \(String(format: "%.2f", FeedRankingEngine.placementSignal(for: item))) "
-            + "| \(String(format: "%.3f", FeedRankingEngine.score(for: item, now: moment))) "
+            + "| \(format(age)) | \(String(format: "%.2f", item.intraSourceRank)) "
             + "| \(short(item.title).replacingOccurrences(of: "|", with: "/")) | \(item.displayOutlet ?? "") |\n"
     }
     report += "\n"
@@ -154,7 +155,7 @@ for directory in snapshotDirectories {
 
     // Editorial order: does the merged page keep each ranked source's order?
     var tau: [String: Double] = [:]
-    for source in Source.allCases where source.hasEditorialOrder {
+    for source in [Source.hn, .memo] {
         let led = front.enumerated().filter { $0.element.source == source }
         var concordant = 0, discordant = 0
         for i in led.indices {
@@ -258,7 +259,6 @@ for directory in snapshotDirectories {
             "intraSourceRank": item.intraSourceRank, "crossRefs": item.orderedCrossRefs.map(label),
             "hasDiscussion": item.discussionURL != nil, "isUndated": item.isUndated,
             "points": item.points ?? -1, "comments": item.commentCount ?? -1, "key": item.normalizedURL,
-            "score": FeedRankingEngine.score(for: item, now: moment),
         ]
         if let laneIndex { row["laneIndex"] = laneIndex }
         if let laneCount { row["laneCount"] = laneCount }
@@ -289,6 +289,7 @@ for directory in snapshotDirectories {
         crossPostedInTop10: crossPostedTop10,
         editorialTau: tau,
         medianAgeTop10Hours: medianAge,
+        oldestTop10Hours: topAges.last ?? 0,
         over24hInTop20: stale,
         featuredSources: featured.map { label($0.source) + ($0.crossRefs.isEmpty ? "" : "+") },
         top10Keys: front.prefix(10).map(\.normalizedURL),
@@ -298,7 +299,7 @@ for directory in snapshotDirectories {
 }
 
 // Overview across snapshots.
-var overview = "## Overview\n\n| Snapshot | Top 10 HN/Memo/Bio/RSS | Top 20 HN/Memo/Bio/RSS | First Bio | First RSS | Cross-posted (top 10) | τ HN | τ Memo | Median age top 10 | Stale in top 20 | Top-10 kept from previous |\n|---|---|---|---|---|---|---|---|---|---|---|\n"
+var overview = "## Overview\n\n| Snapshot | Top 10 HN/Memo/Bio/RSS | Top 20 HN/Memo/Bio/RSS | First Bio | First RSS | Cross-posted (top 10) | τ HN | τ Memo | Median age top 10 | Oldest in top 10 | Stale in top 20 | Top-10 kept from previous |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n"
 var previous: Summary?
 for summary in summaries {
     func split(_ counts: [String: Int]) -> String {
@@ -312,7 +313,7 @@ for summary in summaries {
         + "| \(summary.firstPositionBySource["Bio"].map { "#\($0)" } ?? "–") | \(summary.firstPositionBySource["RSS"].map { "#\($0)" } ?? "–") "
         + "| \(summary.crossPostedStories) (\(summary.crossPostedInTop10)) "
         + "| \(summary.editorialTau["HN"].map { String(format: "%.2f", $0) } ?? "–") | \(summary.editorialTau["Memo"].map { String(format: "%.2f", $0) } ?? "–") "
-        + "| \(format(summary.medianAgeTop10Hours)) | \(summary.over24hInTop20) | \(kept) |\n"
+        + "| \(format(summary.medianAgeTop10Hours)) | \(format(summary.oldestTop10Hours)) | \(summary.over24hInTop20) | \(kept) |\n"
     previous = summary
 }
 overview += "\n**Every cross-posted story (for checking by hand)**\n\n" + allGroups.values.sorted().map { "- \($0)" }.joined(separator: "\n") + "\n"
