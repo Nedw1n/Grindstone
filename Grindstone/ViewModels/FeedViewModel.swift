@@ -27,6 +27,9 @@ final class FeedViewModel: ObservableObject {
     private let preferences: FeedPreferences
     private var cancellables: Set<AnyCancellable> = []
     private var hasPerformedInitialRefresh = false
+    /// Set when feeds or sources change during a refresh. That refresh fetched
+    /// with the old settings, so it fetches again once it lands.
+    private var isRefreshStale = false
 
     init(rssStore: ManualRSSFeedStore, preferences: FeedPreferences) {
         self.rssStore = rssStore
@@ -36,10 +39,7 @@ final class FeedViewModel: ObservableObject {
         rssStore.$feeds
             .dropFirst()
             .sink { [weak self] _ in
-                guard let self else { return }
-                Task {
-                    await self.refresh()
-                }
+                self?.refreshAfterSettingsChange()
             }
             .store(in: &cancellables)
 
@@ -51,9 +51,7 @@ final class FeedViewModel: ObservableObject {
             .sink { [weak self] enabledSources in
                 guard let self else { return }
                 self.applyEnabledSources(enabledSources)
-                Task {
-                    await self.refresh()
-                }
+                self.refreshAfterSettingsChange()
             }
             .store(in: &cancellables)
     }
@@ -141,42 +139,46 @@ final class FeedViewModel: ObservableObject {
         isLoading = true
         defer { isLoading = false }
 
-        let previousItems = items
-        let previousSourceItems = sourceItems
-        let previousLastUpdatedAt = lastUpdatedAt
+        repeat {
+            isRefreshStale = false
+            await fetchAndMerge()
+        } while isRefreshStale && !Task.isCancelled
+    }
+
+    /// Refreshes after feeds or sources change. A refresh already under way
+    /// fetched with the old settings, so it is marked to run again.
+    private func refreshAfterSettingsChange() {
+        isRefreshStale = true
+        Task {
+            await refresh()
+        }
+    }
+
+    private func fetchAndMerge() async {
         let definitions = sourceDefinitions(enabledSources: preferences.enabledSources)
-
         let results = await FeedLoader.loadAll(from: definitions)
-        guard !Task.isCancelled else {
-            items = previousItems
-            sourceItems = previousSourceItems
-            lastUpdatedAt = previousLastUpdatedAt
-            return
-        }
+        guard !Task.isCancelled else { return }
 
-        let nonCancelledResults = results.filter { !$0.wasCancelled }
-        guard !nonCancelledResults.isEmpty else {
-            items = previousItems
-            sourceItems = previousSourceItems
-            lastUpdatedAt = previousLastUpdatedAt
-            return
-        }
+        // Settings may have changed while fetching. Merge against the current
+        // ones so a source switched off in the meantime doesn't come back.
+        let currentDefinitions = sourceDefinitions(enabledSources: preferences.enabledSources)
+        let activeSources = Set(currentDefinitions.map(\.source))
+        let nonCancelledResults = results.filter { !$0.wasCancelled && activeSources.contains($0.source) }
+        guard !nonCancelledResults.isEmpty else { return }
 
         let effectiveSourceItems = effectiveItems(
             from: nonCancelledResults,
-            previousSourceItems: previousSourceItems,
-            activeSources: Set(definitions.map(\.source))
+            previousSourceItems: sourceItems,
+            activeSources: activeSources
         )
         sourceItems = effectiveSourceItems
-        applyMerge(from: effectiveSourceItems, definitions: definitions)
+        applyMerge(from: effectiveSourceItems, definitions: currentDefinitions)
 
         let successfulResults = nonCancelledResults.filter(\.wasSuccessful)
         if !successfulResults.isEmpty {
             let refreshedAt = Date()
             lastUpdatedAt = refreshedAt
             persistCache(sourceItems: effectiveSourceItems, lastUpdatedAt: refreshedAt)
-        } else {
-            lastUpdatedAt = previousLastUpdatedAt
         }
 
         failures = nonCancelledResults.compactMap { result in
